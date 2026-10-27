@@ -45,7 +45,28 @@ export const App: React.FC = () => {
 
   // Initial status probe on mount
   useEffect(() => {
-    refreshSystemStatus()
+    let isMounted = true
+    const initStatus = async () => {
+      try {
+        const [healthData, readinessData] = await Promise.all([
+          apiClient.getHealth(),
+          apiClient.getReadiness(),
+        ])
+        if (isMounted) {
+          setHealth(healthData)
+          setReadiness(readinessData)
+        }
+      } catch (err) {
+        if (isMounted) {
+          const message = err instanceof Error ? err.message : 'Failed to reach runtime backend.'
+          setHealthError(message)
+        }
+      }
+    }
+    initStatus()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   // Handle task prompt submission from the GUI form

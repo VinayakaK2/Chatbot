@@ -7,40 +7,56 @@ from typing import Any, Dict, Optional
 
 from api.schemas.tasks import TaskCreateRequest, TaskResponse, TaskStatus
 from core.config import Settings, get_settings
+from model.contracts import ModelError, ModelProvider
+from model.vllm_adapter import VLLMAdapter
 
 logger = logging.getLogger("agent_runtime.core.task_service")
 
 
 class TaskService:
-    """Coordinates task validation, submission, and result retrieval."""
+    """Coordinates task validation, submission, and model execution orchestration."""
 
-    def __init__(self, settings: Optional[Settings] = None, model_provider: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        model_provider: Optional[ModelProvider] = None,
+    ) -> None:
         """Initialize the task service with optional model adapter provider."""
         self.settings = settings or get_settings()
-        self.model_provider = model_provider
+
+        if model_provider is not None:
+            self.model_provider: Optional[ModelProvider] = model_provider
+        elif self.settings.is_model_configured and self.settings.agent_model_base_url and self.settings.agent_model_name:
+            self.model_provider = VLLMAdapter(
+                base_url=self.settings.agent_model_base_url,
+                model_name=self.settings.agent_model_name,
+                api_key=self.settings.agent_model_api_key,
+                timeout_seconds=self.settings.agent_model_timeout_seconds,
+                max_retries=self.settings.agent_model_max_retries,
+            )
+        else:
+            self.model_provider = None
+
         self._tasks: Dict[str, TaskResponse] = {}
 
     async def submit_task(self, request: TaskCreateRequest) -> TaskResponse:
-        """Submit and process a user task prompt."""
+        """Submit a prompt and process execution via the model provider."""
         task_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
-        # In Phase 0 or if no model provider is attached, record task as pending placeholder
+        # Handle unconfigured model provider state safely
         if self.model_provider is None:
             task = TaskResponse(
                 task_id=task_id,
                 prompt=request.prompt,
-                status=TaskStatus.PENDING,
-                response_text="[Phase 0 Foundation] Task contract accepted. Model integration is active in Phase 1.",
-                finish_reason="phase_0_placeholder",
-                model="none",
+                status=TaskStatus.FAILED,
+                error="Model endpoint is unconfigured. Set AGENT_MODEL_BASE_URL to connect to vLLM.",
                 created_at=created_at,
                 completed_at=created_at,
             )
             self._tasks[task_id] = task
             return task
 
-        # In Phase 1: execute through model provider adapter
         return await self._execute_with_model(task_id, request, created_at)
 
     async def _execute_with_model(
@@ -79,13 +95,25 @@ class TaskService:
             )
             self._tasks[task_id] = completed_task
             return completed_task
-        except Exception as exc:
-            logger.error("Model generation failed for task %s: %s", task_id, type(exc).__name__)
+        except ModelError as err:
+            logger.warning("Model provider error for task %s: %s", task_id, err.message)
             failed_task = TaskResponse(
                 task_id=task_id,
                 prompt=request.prompt,
                 status=TaskStatus.FAILED,
-                error=str(exc),
+                error=err.message,
+                created_at=created_at,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._tasks[task_id] = failed_task
+            return failed_task
+        except Exception as exc:
+            logger.error("Unexpected execution error for task %s: %s", task_id, type(exc).__name__)
+            failed_task = TaskResponse(
+                task_id=task_id,
+                prompt=request.prompt,
+                status=TaskStatus.FAILED,
+                error="An unexpected internal error occurred during model generation.",
                 created_at=created_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )

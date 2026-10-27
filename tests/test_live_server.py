@@ -9,6 +9,23 @@ import uvicorn
 from api.app import create_app
 from core.config import Settings
 from core.task_service import TaskService, set_task_service
+from model.contracts import ModelProvider, ModelResponse
+
+
+class SmokeMockProvider(ModelProvider):
+    """Minimal mock model provider for socket smoke verification."""
+
+    async def generate(self, prompt: str, **kwargs) -> ModelResponse:
+        """Return deterministic completion."""
+        return ModelResponse(
+            text="Socket server response.",
+            finish_reason="stop",
+            model="Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+        )
+
+    async def check_connectivity(self) -> bool:
+        """Return healthy status."""
+        return True
 
 
 @pytest.mark.asyncio
@@ -17,7 +34,7 @@ async def test_live_server_socket_binding() -> None:
     # Use a dedicated port for testing to avoid collisions
     test_port = 8765
     settings = Settings(port=test_port)
-    set_task_service(TaskService(settings=settings))
+    set_task_service(TaskService(settings=settings, model_provider=SmokeMockProvider()))
     app = create_app(settings)
 
     config = uvicorn.Config(app, host="127.0.0.1", port=test_port, log_level="error")
@@ -56,7 +73,8 @@ async def test_live_server_socket_binding() -> None:
             )
             assert task_resp.status_code == 201
             task_json = task_resp.json()
-            assert task_json["status"] == "pending"
+            assert task_json["status"] == "completed"
+            assert task_json["response_text"] == "Socket server response."
             assert "task_id" in task_json
 
     finally:

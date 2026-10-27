@@ -11,6 +11,7 @@ from api.routes.health import router as health_router
 from api.routes.tasks import router as tasks_router
 from core.config import Settings, get_settings
 from core.logging_config import setup_logging
+from core.task_service import TaskService, get_task_service
 
 logger = logging.getLogger("agent_runtime.api.app")
 
