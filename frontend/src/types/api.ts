@@ -10,7 +10,6 @@ export interface HealthResponse {
   timestamp: string
   model_configured: boolean
   model_id: string | null
-  model_endpoint: string | null
 }
 
 export type ReadinessStatusType = 'ready' | 'unconfigured' | 'unreachable' | 'error'

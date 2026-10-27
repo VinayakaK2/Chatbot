@@ -3,9 +3,11 @@
 - **Project:** Coding Agent Runtime
 - **Target Phases:** Phase 0 (Repository & Development Foundation) and Phase 1 (Model Adapter & Task API)
 - **Target Model:** `Qwen2.5-Coder-14B-Instruct` served via Google Colab vLLM (OpenAI-compatible)
-- **Date:** 2026-10-27
+- **Date:** 2026-10-27 (Audited & Hardened)
 - **Author:** Senior Staff Software & Verification Engineer
 - **Report Location:** `docs/reports/phase-0-1-implementation-report.md`
+- **Verification Output Log:** `docs/reports/test-output.log`
+- **Remote Repository:** `https://github.com/VinayakaK2/chatbot`
 
 ---
 
@@ -15,7 +17,7 @@
 |---|---|
 | **Implemented Scope** | **Phase 0 & Phase 1 Only** (Repository Foundation, FastAPI Backend, React+TypeScript GUI, vLLM Adapter & Task API) |
 | **Overall Status** | `PASS_WITH_LIMITATIONS` |
-| **Phase 0 Gate** | `PASS` (All 12 criteria fulfilled and verified) |
+| **Phase 0 Gate** | `PASS` (All 12 criteria fulfilled, audited, and verified) |
 | **Phase 1 Gate** | `PASS_WITH_LIMITATIONS` (All unit/mock/API criteria pass; live endpoint probe is conditional on active Colab GPU session) |
 | **Live Model Connectivity** | `SKIPPED / CONDITIONALLY BLOCKED` (Active Colab vLLM server is unconfigured in development environment) |
 | **Major Unresolved Blockers** | None in software implementation. Live verification awaits operator deployment of `colab_vllm_server.ipynb`. |
@@ -58,7 +60,7 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 ## C. Baseline Environment & State
 
 - **Repository Root:** `H:\chatbot`
-- **Git State:** Fresh repository initialized; baseline commit `ae6e7c9` created; Phase 0 committed at `ffdbd36`.
+- **Git State:** Repository initialized; baseline commit `ae6e7c9` created; Phase 0 committed at `ffdbd36`; Phase 1 committed at `8f589f7`; remote set to `https://github.com/VinayakaK2/chatbot.git`.
 - **Python Version:** 3.11.8 (located at `H:\chatbot\.venv\Scripts\python.exe`)
 - **Node.js & npm:** Node v24.15.0, npm 11.12.1
 - **Package Manager:** `uv` 0.11.21 for Python dependencies; `npm` for frontend
@@ -75,28 +77,29 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 | `.gitignore` | Security | Modified | Excluded `.venv/`, `node_modules/`, `dist/`, `.env`, logs, and temporary caches | Git tracking check |
 | `.env.example` | Configuration | Modified | Provided safe placeholders with zero real secrets | Secret audit |
 | `README.md` | Documentation | Modified | Comprehensive setup, run, test, and architecture documentation | Manual review |
-| `core/config.py` | Configuration | Created | Pydantic Settings model with validation for host, port, CORS, timeout, retries, and secret redaction | `tests/test_config.py` (6 tests) |
-| `core/logging_config.py` | Logging / Security | Created | Centralized logging setup with `RedactingFormatter` masking `Bearer` and `sk-` tokens | `tests/test_logging.py` (3 tests) |
-| `core/task_service.py` | Task Orchestration | Created | Decouples HTTP routes from execution; manages task lifecycle and dispatches to `ModelProvider` | `tests/test_api_tasks.py` (6 tests) |
-| `api/schemas/health.py` | API Contracts | Created | Typed schemas for liveness (`HealthResponse`) and probe (`ModelReadinessResponse`) | `tests/test_api_health.py` (3 tests) |
-| `api/schemas/tasks.py` | API Contracts | Created | Typed schemas for prompt submission (`TaskCreateRequest`) and results (`TaskResponse`) | `tests/test_api_tasks.py` (6 tests) |
+| `core/config.py` | Configuration | Created / Hardened | Pydantic Settings model with validation for host, port, CORS, timeout, retries, URL credential/query rejection, and secret redaction | `tests/test_config.py` (8 tests) |
+| `core/logging_config.py` | Logging / Security | Created / Hardened | Centralized logging setup with multi-pattern `RedactingFormatter` masking `Bearer`, `sk-`, `password=`, `token=`, `user:pass@`, and URL query secrets | `tests/test_logging.py` (7 tests) |
+| `core/task_service.py` | Task Orchestration | Created | Decouples HTTP routes from execution; manages task lifecycle and dispatches to `ModelProvider` | `tests/test_api_tasks.py` (9 tests) |
+| `api/schemas/health.py` | API Contracts | Created / Hardened | Typed schemas for liveness (`HealthResponse` with `model_endpoint` omitted for safety) and probe (`ModelReadinessResponse`) | `tests/test_api_health.py` (7 tests) |
+| `api/schemas/tasks.py` | API Contracts | Created | Typed schemas for prompt submission (`TaskCreateRequest`) and results (`TaskResponse`) | `tests/test_api_tasks.py` (9 tests) |
 | `api/schemas/events.py` | API Contracts | Created | Event contract specification (`RuntimeEvent`, `RuntimeEventType`) for future streaming | Static type check |
-| `api/routes/health.py` | API Routing | Created | Liveness (`/api/health`) and non-generating readiness probe (`/api/readiness`) | `tests/test_api_health.py` |
+| `api/routes/health.py` | API Routing | Created / Hardened | Liveness (`/api/health`, zero internal URLs) and non-generating readiness probe (`/api/readiness`, with `sanitize_endpoint_url`) | `tests/test_api_health.py` |
 | `api/routes/tasks.py` | API Routing | Created | `POST /api/tasks` and `GET /api/tasks/{task_id}` with structured error responses | `tests/test_api_tasks.py` |
 | `api/app.py` | API Boundary | Created | FastAPI factory with narrow CORS middleware, dependency overrides, and custom exception handlers | `tests/test_live_server.py` |
 | `main.py` | Bootstrap | Created | Lightweight bootstrap running Uvicorn server without business logic | Live socket test |
 | `model/contracts.py` | Model Boundary | Created | Abstract `ModelProvider`, `ModelResponse`, `ModelRequest`, and `ModelError` hierarchy | Static type check & unit tests |
 | `model/vllm_adapter.py` | Model Integration | Created | vLLM OpenAI-compatible adapter with bounded transient retry and error normalization | `tests/test_model_adapter.py` (11 tests) |
 | `frontend/` | Web GUI | Created | React 19 + TypeScript + Vite responsive single-page application with centralized API client | `npm run build`, `npm run lint` |
-| `tests/test_config.py` | Test Suite | Created | Tests valid configs, invalid URLs, port limits, and secret redaction | 6 passed |
-| `tests/test_logging.py` | Test Suite | Created | Tests secret masking for Bearer tokens and API keys | 3 passed |
-| `tests/test_api_health.py` | Test Suite | Created | Tests health and readiness API routes | 3 passed |
-| `tests/test_api_tasks.py` | Test Suite | Created | Tests prompt bounds, empty validation, mock execution, and 404 handling | 6 passed |
+| `tests/test_config.py` | Test Suite | Created | Tests valid configs, invalid URLs, credential-in-URL rejection, port limits, and secret redaction | 8 passed |
+| `tests/test_logging.py` | Test Suite | Created | Tests secret masking for Bearer tokens, API keys, passwords, URL userinfo, and query secrets | 7 passed |
+| `tests/test_api_health.py` | Test Suite | Created | Tests health (no endpoint leaks), readiness timeout, upstream 502, connection drop, and ready state | 7 passed |
+| `tests/test_api_tasks.py` | Test Suite | Created | Tests prompt bounds, empty validation, mock execution, task lookup by ID, timeout error state, and 404 handling | 9 passed |
 | `tests/test_model_adapter.py`| Test Suite | Created | Tests vLLM adapter success normalization, transient retry, and 7 failure categories | 11 passed |
 | `tests/test_live_server.py` | Test Suite | Created | Live TCP socket binding and HTTP communication test | 1 passed |
 | `tests/test_smoke_live.py` | Test Suite | Created | Live model completion smoke test against running vLLM endpoint | 1 skipped (unconfigured) |
 | `docs/adr/0001-...` | Architecture | Created | ADR documenting modular design, adapter pattern, and security boundaries | Documentation review |
-| `docs/api-contracts.md` | API Reference | Created | Full documentation of status codes, schemas, and error responses | Documentation review |
+| `docs/api-contracts.md` | API Reference | Created / Hardened | Full documentation of status codes, schemas, and error responses | Documentation review |
+| `docs/reports/test-output.log` | Test Artifact | Created | Saved raw execution log of pytest, oxlint, and vite build runs | Command verification |
 
 ---
 
@@ -105,7 +108,7 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 ```text
 +--------------------------------------------------------------+
 |                   React + TypeScript GUI                     |
-|  - TaskForm (bounds check)                                   |
+|  - TaskForm (client bounds check: 1 to 32,768 characters)     |
 |  - HealthStatus (liveness & readiness badges)                |
 |  - TaskView (response text, token usage, error banners)      |
 +------------------------------+-------------------------------+
@@ -146,8 +149,10 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 ### Critical Security Boundaries
 1. **Browser Isolation:** The frontend browser code interacts exclusively with `127.0.0.1:8000/api/*`. It holds zero credentials and cannot reach the vLLM Colab tunnel directly.
 2. **Deterministic Validation:** Prompts must be 1–32,768 characters and cannot be whitespace-only. Token limits are clamped to 1–8,192.
-3. **Secret Masking:** The `RedactingFormatter` automatically scrubs any `Bearer <token>` or `sk-<key>` from server logs. Diagnostic dictionaries explicitly omit raw secret strings.
-4. **Data, Not Code:** Model responses are captured as textual data and token metrics. No tool execution or code evaluation occurs in Phase 1.
+3. **Health Endpoint Hardening:** `/api/health` returns only liveness (`healthy`) and `model_configured: bool`. It does NOT return `model_endpoint`, preventing accidental disclosure of private tunnel URLs or internal routing.
+4. **URL Credential Sanitization:** `core/config.py` explicitly rejects URLs containing basic auth (`http://user:pass@host`) or query parameters (`?key=...`). The readiness endpoint uses `sanitize_endpoint_url` to strip any userinfo or query strings before returning status.
+5. **Multi-Layered Secret Masking:** The `RedactingFormatter` scrubs Bearer tokens, `sk-` keys, `password=`, `token=`, `user:pass@`, and URL query parameters from logs.
+6. **Data, Not Code:** Model responses are captured as textual data and token metrics. No tool execution or code evaluation occurs in Phase 1.
 
 ---
 
@@ -157,14 +162,14 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 |---|---|---|---|---|---|---|
 | **AC-01** | Phase 0 | Clean repo discovery & baseline tracking | Baseline commit `ae6e7c9` created; all sources preserved | `git status`, `git log -1` | Clean baseline recorded | `PASS` |
 | **AC-02** | Phase 0 | Dependency management & environment | `pyproject.toml` with pinned/constrained dependencies | `uv lock`, `uv pip install -e .` | Installed 27 packages | `PASS` |
-| **AC-03** | Phase 0 | Typed configuration & validation | `core/config.py` with port bounds, URL validation, defaults | `pytest tests/test_config.py` | 6 tests passed | `PASS` |
-| **AC-04** | Phase 0 | Centralized logging & secret redaction | `core/logging_config.py` with regex masking | `pytest tests/test_logging.py` | 3 tests passed | `PASS` |
-| **AC-05** | Phase 0 | Health & readiness API contracts | `/api/health` and `/api/readiness` routes | `pytest tests/test_api_health.py` | 3 tests passed | `PASS` |
-| **AC-06** | Phase 0 | Initial task submission contract | `/api/tasks` validating prompt length and rejection of whitespace | `pytest tests/test_api_tasks.py` | 6 tests passed | `PASS` |
+| **AC-03** | Phase 0 | Typed configuration & validation | `core/config.py` with port bounds, URL validation, URL credential rejection, defaults | `pytest tests/test_config.py` | 8 tests passed | `PASS` |
+| **AC-04** | Phase 0 | Centralized logging & secret redaction | `core/logging_config.py` masking Bearer, sk-, password, URL auth, query keys | `pytest tests/test_logging.py` | 7 tests passed | `PASS` |
+| **AC-05** | Phase 0 | Health & readiness API contracts | `/api/health` (no endpoint leak) and `/api/readiness` (sanitized probe) | `pytest tests/test_api_health.py` | 7 tests passed | `PASS` |
+| **AC-06** | Phase 0 | Initial task submission contract | `/api/tasks` validating prompt length, rejection of whitespace, task lookup | `pytest tests/test_api_tasks.py` | 9 tests passed | `PASS` |
 | **AC-07** | Phase 0 | Live TCP socket binding | Live Uvicorn server bound on localhost | `pytest tests/test_live_server.py` | 1 test passed | `PASS` |
-| **AC-08** | Phase 0 | Minimal web GUI application | React 19 + TypeScript + Vite in `frontend/` | `npm --prefix frontend run build` | Built in 919ms (0 errors) | `PASS` |
+| **AC-08** | Phase 0 | Minimal web GUI application | React 19 + TypeScript + Vite in `frontend/` | `npm --prefix frontend run build` | Built in 550ms (0 errors) | `PASS` |
 | **AC-09** | Phase 0 | Frontend linting & clean code | Oxlint executed on all 8 frontend files | `npm --prefix frontend run lint` | 0 warnings, 0 errors | `PASS` |
-| **AC-10** | Phase 0 | No credentials in client bundle | Regex search across `frontend/dist/` for secrets | `Select-String "sk-", "AGENT_MODEL"` | 0 matches found | `PASS` |
+| **AC-10** | Phase 0 | No credentials in client bundle | Deep regex search across `frontend/dist/` for secrets, tokens, and keys | Multi-pattern regex audit | 0 real secrets found | `PASS` |
 | **AC-11** | Phase 0 | Initial event contracts defined | `api/schemas/events.py` defines 8 runtime event types | Code inspection & typecheck | Contracts established | `PASS` |
 | **AC-12** | Phase 0 | Documentation & Setup Guide | `README.md` with Windows/PowerShell instructions | Documentation inspection | Complete & reproducible | `PASS` |
 | **AC-13** | Phase 1 | Provider-independent model interface | `model/contracts.py` defines `ModelProvider` ABC | Code inspection & typecheck | Verified interface | `PASS` |
@@ -172,7 +177,7 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 | **AC-15** | Phase 1 | Response normalization | Text, finish reason, usage, model, and tool_calls parsed | `TestVLLMAdapterSuccess` | 3 tests passed | `PASS` |
 | **AC-16** | Phase 1 | Comprehensive error categorization | 401/403, 429, 500, timeouts, connection errors, malformed JSON | `TestVLLMAdapterFailures` | 7 tests passed | `PASS` |
 | **AC-17** | Phase 1 | Bounded transient retries | Transient 503 retried with exponential backoff; succeeds | `test_transient_503_retry_succeeds` | 1 test passed | `PASS` |
-| **AC-18** | Phase 1 | Separation of health vs connectivity | Liveness check runs without model; readiness probe bounded | `tests/test_api_health.py` | 3 tests passed | `PASS` |
+| **AC-18** | Phase 1 | Separation of health vs connectivity | Liveness check runs without model; readiness probe bounded | `tests/test_api_health.py` | 7 tests passed | `PASS` |
 | **AC-19** | Phase 1 | Task API executes via Model Adapter | `POST /api/tasks` executes mock provider; returns completed | `test_configured_mock_model_task_submission` | 1 test passed | `PASS` |
 | **AC-20** | Phase 1 | Web GUI model interaction | UI submits task, shows executing spinner, renders output | Code inspection & build | Production build verified | `PASS` |
 | **AC-21** | Phase 1 | Live model completion smoke test | Live chat completion against Colab vLLM server | `pytest tests/test_smoke_live.py` | Skipped (unconfigured) | `BLOCKED` |
@@ -186,27 +191,40 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 - **Command:** `uv run pytest -v`
 - **Working Directory:** `H:\chatbot`
 - **Exit Code:** `0`
-- **Test Summary:** `30 passed, 1 skipped in 7.75s`
+- **Test Summary:** `43 passed, 1 skipped in 4.03s`
 - **Details:**
-  - `tests/test_config.py::test_default_configuration_loads_safely` `PASSED`
-  - `tests/test_config.py::test_valid_model_configuration_loads` `PASSED`
-  - `tests/test_config.py::test_invalid_url_scheme_raises_validation_error` `PASSED`
-  - `tests/test_config.py::test_invalid_port_range_raises_validation_error` `PASSED`
-  - `tests/test_config.py::test_negative_timeout_raises_validation_error` `PASSED`
-  - `tests/test_config.py::test_sanitized_diagnostics_redacts_api_key` `PASSED`
-  - `tests/test_logging.py::test_bearer_token_redacted` `PASSED`
-  - `tests/test_logging.py::test_api_key_parameter_redacted` `PASSED`
-  - `tests/test_logging.py::test_setup_logging_initializes_logger` `PASSED`
   - `tests/test_api_health.py::test_health_endpoint_unconfigured_model` `PASSED`
   - `tests/test_api_health.py::test_health_endpoint_configured_model` `PASSED`
   - `tests/test_api_health.py::test_readiness_endpoint_unconfigured` `PASSED`
+  - `tests/test_api_health.py::test_readiness_endpoint_upstream_ready` `PASSED`
+  - `tests/test_api_health.py::test_readiness_endpoint_upstream_failure` `PASSED`
+  - `tests/test_api_health.py::test_readiness_endpoint_probe_timeout` `PASSED`
+  - `tests/test_api_health.py::test_readiness_endpoint_connection_refused` `PASSED`
   - `tests/test_api_tasks.py::test_unconfigured_model_task_submission` `PASSED`
   - `tests/test_api_tasks.py::test_configured_mock_model_task_submission` `PASSED`
+  - `tests/test_api_tasks.py::test_task_timeout_error_state` `PASSED`
+  - `tests/test_api_tasks.py::test_task_auth_error_state` `PASSED`
+  - `tests/test_api_tasks.py::test_task_lookup_success` `PASSED`
   - `tests/test_api_tasks.py::test_empty_prompt_rejected` `PASSED`
   - `tests/test_api_tasks.py::test_missing_prompt_rejected` `PASSED`
   - `tests/test_api_tasks.py::test_oversized_prompt_rejected` `PASSED`
   - `tests/test_api_tasks.py::test_get_nonexistent_task_returns_404` `PASSED`
+  - `tests/test_config.py::test_default_configuration_loads_safely` `PASSED`
+  - `tests/test_config.py::test_valid_model_configuration_loads` `PASSED`
+  - `tests/test_config.py::test_invalid_url_scheme_raises_validation_error` `PASSED`
+  - `tests/test_config.py::test_url_with_embedded_credentials_rejected` `PASSED`
+  - `tests/test_config.py::test_url_with_query_params_rejected` `PASSED`
+  - `tests/test_config.py::test_invalid_port_range_raises_validation_error` `PASSED`
+  - `tests/test_config.py::test_negative_timeout_raises_validation_error` `PASSED`
+  - `tests/test_config.py::test_sanitized_diagnostics_redacts_api_key` `PASSED`
   - `tests/test_live_server.py::test_live_server_socket_binding` `PASSED`
+  - `tests/test_logging.py::test_bearer_token_redacted` `PASSED`
+  - `tests/test_logging.py::test_sk_prefixed_token_redacted` `PASSED`
+  - `tests/test_logging.py::test_api_key_parameter_redacted` `PASSED`
+  - `tests/test_logging.py::test_password_and_token_redacted` `PASSED`
+  - `tests/test_logging.py::test_url_credentials_redacted` `PASSED`
+  - `tests/test_logging.py::test_url_query_secrets_redacted` `PASSED`
+  - `tests/test_logging.py::test_setup_logging_initializes_logger` `PASSED`
   - `tests/test_model_adapter.py::test_successful_response_normalized` `PASSED`
   - `tests/test_model_adapter.py::test_tool_call_payload_preserved_unexecuted` `PASSED`
   - `tests/test_model_adapter.py::test_missing_optional_fields_handled_safely` `PASSED`
@@ -218,13 +236,13 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
   - `tests/test_model_adapter.py::test_malformed_json_raises_model_response_error` `PASSED`
   - `tests/test_model_adapter.py::test_empty_choices_raises_model_response_error` `PASSED`
   - `tests/test_model_adapter.py::test_transient_503_retry_succeeds_on_second_attempt` `PASSED`
-  - `tests/test_smoke_live.py::test_live_chat_completion_smoke` `SKIPPED` (Live endpoint not set)
+  - `tests/test_smoke_live.py::test_live_chat_completion_smoke` `SKIPPED` (Live endpoint unconfigured)
 
 ### 2. Frontend Linting
 - **Command:** `npm --prefix frontend run lint`
 - **Working Directory:** `H:\chatbot`
 - **Exit Code:** `0`
-- **Output:** `Found 0 warnings and 0 errors. Finished in 47ms on 8 files with 116 rules.`
+- **Output:** `Found 0 warnings and 0 errors. Finished in 17ms on 8 files with 116 rules.`
 
 ### 3. Frontend Production Build
 - **Command:** `npm --prefix frontend run build`
@@ -234,23 +252,28 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
   - `dist/index.html` (0.45 kB)
   - `dist/assets/index-DbhX7czk.css` (6.06 kB)
   - `dist/assets/index-DPeojpJe.js` (230.40 kB)
-  - `Built in 919ms with zero errors.`
+  - `Built in 550ms with zero errors.`
 
-### 4. Client Bundle Secret Scan
-- **Command:** `Select-String -Path "frontend/dist/assets/*.js" -Pattern "\bsk-[A-Za-z0-9]", "AGENT_MODEL"`
-- **Working Directory:** `H:\chatbot`
-- **Exit Code:** `0`
-- **Output:** Zero occurrences of secret patterns or backend configuration strings found in client assets.
+### 4. Client Bundle & Source Secret Audit
+- **Command:** Multi-pattern regex audit across frontend assets and Python source files.
+- **Patterns Checked:**
+  - `\bsk-[A-Za-z0-9_\-]{8,}\b`: 0 matches
+  - `password\s*[:=]\s*["'][^"']{4,}["']`: 0 matches
+  - `token\s*[:=]\s*["'][^"']{8,}["']`: 0 matches
+  - `https?://[^/\s:@]+:[^/\s:@]+@`: 0 matches
+  - `[?&](?:api_key|token|secret)=[A-Za-z0-9_\-]+`: 0 matches
+  - `AGENT_MODEL_API_KEY`: 0 matches in frontend dist
 
 ---
 
 ## H. Security & Configuration Review
 
-1. **Secrets Storage:** Real credentials must reside in local `.env` or system environment variables. Both `.gitignore` and `.env.example` prevent accidental credential commits.
-2. **Logging Hygiene:** `RedactingFormatter` scrubs Bearer authorization headers and secret tokens from all terminal logs.
-3. **API Boundary:** Stack traces from unexpected server errors are captured in server logs with full context, while client API consumers receive clean HTTP 500 error objects without stack dumps.
-4. **CORS Boundary:** Restricted to `http://localhost:5173` and `http://127.0.0.1:5173`.
-5. **No Direct Model Access from Browser:** The web application relies exclusively on `/api/tasks` and `/api/health`. The browser has no knowledge of the underlying Colab tunnel or auth tokens.
+1. **Information Disclosure in Health Endpoint Eliminated:** `/api/health` returns only application liveness and `model_configured: bool`. It omits `model_endpoint`, ensuring internal proxy paths, tunnel URLs, or hostnames are never exposed to public or unauthenticated probes.
+2. **URL Credential Sanitization:** `core/config.py` rejects embedded user credentials and query strings at config validation time. Any URL displayed in `/api/readiness` is processed by `sanitize_endpoint_url` to strip basic auth and query parameters.
+3. **Multi-Pattern Secret Redaction in Logs:** `RedactingFormatter` masks Bearer tokens, `sk-` keys, `password=`, `token=`, `user:pass@`, and query parameters across all log messages.
+4. **Clean API Error Responses:** Unhandled exceptions return generic HTTP 500 error envelopes; internal tracebacks are logged server-side and never returned in HTTP responses.
+5. **CORS Boundary:** Restricted to `http://localhost:5173` and `http://127.0.0.1:5173`.
+6. **No Direct Model Access from Browser:** The web application relies exclusively on `/api/tasks` and `/api/health`. The browser has no knowledge of the underlying Colab tunnel or auth tokens.
 
 ---
 
@@ -282,7 +305,7 @@ The architectural research paper *"Dive into Claude Code: The Design Space of To
 
 **Justification:**
 1. **Phase 0 is 100% COMPLETE and APPROVED:** All foundation requirements (dependencies, configuration, logging redaction, FastAPI app, React GUI, tests) are fully implemented and verified.
-2. **Phase 1 Software Implementation is 100% COMPLETE and VERIFIED:** The provider contract, vLLM adapter, error mapping, transient retries, task service, and GUI integration are fully operational with 30 passing automated tests.
+2. **Phase 1 Software Implementation is 100% COMPLETE and VERIFIED:** The provider contract, vLLM adapter, error mapping, transient retries, task service, and GUI integration are fully operational with 43 passing automated tests.
 3. **Conditional Gate on Live GPU Compute:** The status is explicitly marked as conditional because live Qwen2.5-Coder model inference requires an active Google Colab GPU session provided by the operator. The mock adapter and offline tests prove complete protocol conformance without fabricating a live result.
 
 ---

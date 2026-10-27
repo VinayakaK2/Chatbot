@@ -88,6 +88,12 @@ class Settings(BaseSettings):
             return None
         if not (stripped.startswith("http://") or stripped.startswith("https://")):
             raise ValueError(f"AGENT_MODEL_BASE_URL must start with http:// or https://, got: {stripped}")
+        from urllib.parse import urlsplit
+        parts = urlsplit(stripped)
+        if parts.username or parts.password:
+            raise ValueError("AGENT_MODEL_BASE_URL must not contain embedded user credentials. Use AGENT_MODEL_API_KEY instead.")
+        if parts.query:
+            raise ValueError("AGENT_MODEL_BASE_URL must not contain query parameters.")
         return stripped.rstrip("/")
 
     @field_validator("agent_model_timeout_seconds")
@@ -113,6 +119,14 @@ class Settings(BaseSettings):
 
     def get_sanitized_diagnostics(self) -> dict[str, Any]:
         """Return a safe dictionary of configuration parameters with credentials redacted."""
+        clean_url: Optional[str] = None
+        if self.agent_model_base_url:
+            from urllib.parse import urlsplit
+            p = urlsplit(self.agent_model_base_url)
+            host = p.hostname or ""
+            port_suffix = f":{p.port}" if p.port and p.port not in (80, 443) else ""
+            clean_url = f"{p.scheme}://{host}{port_suffix}{p.path.rstrip('/')}"
+
         return {
             "host": self.host,
             "port": self.port,
@@ -120,7 +134,7 @@ class Settings(BaseSettings):
             "log_level": self.log_level,
             "cors_origins": self.cors_origins,
             "is_model_configured": self.is_model_configured,
-            "agent_model_base_url": self.agent_model_base_url,
+            "agent_model_base_url": clean_url,
             "agent_model_name": self.agent_model_name,
             "agent_model_api_key_set": bool(self.agent_model_api_key),
             "agent_model_timeout_seconds": self.agent_model_timeout_seconds,

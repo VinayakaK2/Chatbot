@@ -7,22 +7,34 @@ from api.app import create_app
 from api.schemas.tasks import TaskStatus
 from core.config import Settings
 from core.task_service import TaskService, set_task_service
-from model.contracts import ModelProvider, ModelResponse
+from model.contracts import (
+    ModelAuthError,
+    ModelProvider,
+    ModelResponse,
+    ModelTimeoutError,
+)
 
 
 class MockModelProvider(ModelProvider):
     """Deterministic mock provider for unit and integration testing."""
 
-    def __init__(self, response_text: str = "Mocked Qwen response text.") -> None:
-        """Initialize mock provider with static output."""
+    def __init__(
+        self,
+        response_text: str = "Mocked Qwen response text.",
+        should_fail_with: Exception = None,
+    ) -> None:
+        """Initialize mock provider with static output or simulated failure."""
         self.response_text = response_text
+        self.should_fail_with = should_fail_with
         self.invoked = False
         self.last_prompt = None
 
     async def generate(self, prompt: str, **kwargs) -> ModelResponse:
-        """Return standardized mock completion."""
+        """Return standardized mock completion or raise simulated exception."""
         self.invoked = True
         self.last_prompt = prompt
+        if self.should_fail_with:
+            raise self.should_fail_with
         return ModelResponse(
             text=self.response_text,
             finish_reason="stop",
@@ -60,6 +72,7 @@ class TestTaskEndpoints:
         assert data["prompt"] == "Inspect codebase and check test coverage."
         assert data["status"] == "failed"
         assert "unconfigured" in data["error"].lower()
+        assert data["completed_at"] is not None
 
     async def test_configured_mock_model_task_submission(self) -> None:
         """Verify task submission succeeds and executes via injected model provider."""
@@ -82,8 +95,76 @@ class TestTaskEndpoints:
         assert data["model"] == "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
         assert data["finish_reason"] == "stop"
         assert data["usage"]["total_tokens"] == 25
+        assert data["error"] is None
+        assert data["completed_at"] is not None
         assert mock_provider.invoked is True
         assert mock_provider.last_prompt == "Explain dependency injection."
+
+    async def test_task_timeout_error_state(self) -> None:
+        """Verify task records failed status when upstream model request times out."""
+        timeout_exc = ModelTimeoutError("Upstream model request timed out after 60.0s")
+        mock_provider = MockModelProvider(should_fail_with=timeout_exc)
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/tasks",
+                json={"prompt": "Run a very slow query."},
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "failed"
+        assert "timed out" in data["error"].lower()
+        assert data["response_text"] is None
+        assert data["completed_at"] is not None
+
+    async def test_task_auth_error_state(self) -> None:
+        """Verify task records failed status when upstream model rejects credentials."""
+        auth_exc = ModelAuthError("Authentication failed with upstream model server (HTTP 401)")
+        mock_provider = MockModelProvider(should_fail_with=auth_exc)
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/tasks",
+                json={"prompt": "Test auth failure."},
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "failed"
+        assert "authentication failed" in data["error"].lower()
+
+    async def test_task_lookup_success(self) -> None:
+        """Verify task can be queried by ID and matches the submitted task state."""
+        mock_provider = MockModelProvider(response_text="Lookup test response.")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create_resp = await client.post(
+                "/api/tasks",
+                json={"prompt": "Task for lookup testing."},
+            )
+            assert create_resp.status_code == 201
+            task_id = create_resp.json()["task_id"]
+
+            lookup_resp = await client.get(f"/api/tasks/{task_id}")
+            assert lookup_resp.status_code == 200
+            lookup_data = lookup_resp.json()
+            assert lookup_data["task_id"] == task_id
+            assert lookup_data["prompt"] == "Task for lookup testing."
+            assert lookup_data["status"] == "completed"
+            assert lookup_data["response_text"] == "Lookup test response."
 
     async def test_empty_prompt_rejected(self) -> None:
         """Reject prompt containing only whitespace with HTTP 422."""

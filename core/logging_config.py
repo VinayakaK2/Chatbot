@@ -5,15 +5,20 @@ import re
 import sys
 from typing import Optional
 
-# Regex patterns to detect and mask API keys, auth headers, and bearer tokens
-_SECRET_PATTERNS = [
-    re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE),
-    re.compile(r"(sk-[A-Za-z0-9_\-\.]{10,})", re.IGNORECASE),
-    re.compile(r"(api[_-]?key[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9_\-\.]{8,})", re.IGNORECASE),
-    re.compile(r"(authorization[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9_\-\.]{8,})", re.IGNORECASE),
-]
-
 _REDACTED_LABEL: str = "[REDACTED]"
+
+# Multi-layered patterns to detect and mask API keys, auth headers, tokens, passwords, and URL secrets
+_SECRET_PATTERNS = [
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(sk-[A-Za-z0-9_\-\.]{8,})", re.IGNORECASE), _REDACTED_LABEL),
+    (re.compile(r"(api[_-]?key[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9_\-\.]{6,}", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(authorization[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9_\-\.]{6,}", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(password[\"']?\s*[:=]\s*[\"']?)[^\s\"',]+", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(token[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(secret[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9_\-\.]{6,}", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+    (re.compile(r"(https?://)([^:\s]+:[^@\s]+@)", re.IGNORECASE), r"\1[USER_PASS_REDACTED]@"),
+    (re.compile(r"([?&](?:api_key|key|token|access_token|secret)=)[^&\s]+", re.IGNORECASE), r"\1" + _REDACTED_LABEL),
+]
 
 
 class RedactingFormatter(logging.Formatter):
@@ -23,13 +28,8 @@ class RedactingFormatter(logging.Formatter):
         """Format the log record and apply regex-based secret redaction to the text."""
         original = super().format(record)
         redacted = original
-        for pattern in _SECRET_PATTERNS:
-            if "Bearer" in pattern.pattern:
-                redacted = pattern.sub(r"\1" + _REDACTED_LABEL, redacted)
-            elif "api" in pattern.pattern.lower() or "auth" in pattern.pattern.lower():
-                redacted = pattern.sub(r"\1" + _REDACTED_LABEL, redacted)
-            else:
-                redacted = pattern.sub(_REDACTED_LABEL, redacted)
+        for pattern, replacement in _SECRET_PATTERNS:
+            redacted = pattern.sub(replacement, redacted)
         return redacted
 
 

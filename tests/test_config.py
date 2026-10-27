@@ -52,6 +52,20 @@ class TestConfiguration:
             Settings()
         assert "AGENT_MODEL_BASE_URL must start with http:// or https://" in str(exc_info.value)
 
+    def test_url_with_embedded_credentials_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reject URLs containing embedded username or password to prevent credential leakage."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://user:password123@vllm.tunnel.com/v1")
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "embedded user credentials" in str(exc_info.value)
+
+    def test_url_with_query_params_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reject URLs containing query parameters that might carry tokens or secrets."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://vllm.tunnel.com/v1?token=secrettoken")
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "query parameters" in str(exc_info.value)
+
     def test_invalid_port_range_raises_validation_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reject out-of-range TCP port numbers."""
         monkeypatch.setenv("PORT", "70000")

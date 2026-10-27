@@ -10,6 +10,7 @@ All endpoints adhere to standardized status codes and Pydantic validation schema
 
 ### GET `/api/health`
 Checks backend service liveness and reports whether model endpoint configuration is present.
+Does not expose internal endpoint URLs or infrastructure details to unauthenticated callers.
 
 - **Status Code:** `200 OK`
 - **Response Schema (`HealthResponse`):**
@@ -19,8 +20,7 @@ Checks backend service liveness and reports whether model endpoint configuration
   "version": "0.1.0",
   "timestamp": "2026-10-27T11:50:00.000000Z",
   "model_configured": true,
-  "model_id": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
-  "model_endpoint": "https://your-tunnel.trycloudflare.com/v1"
+  "model_id": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
 }
 ```
 

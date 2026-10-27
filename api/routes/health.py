@@ -2,6 +2,7 @@
 
 import logging
 from typing import Optional
+from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, status
 import httpx
 
@@ -12,6 +13,20 @@ router = APIRouter(prefix="/api", tags=["System Health"])
 logger = logging.getLogger("agent_runtime.api.health")
 
 
+def sanitize_endpoint_url(url: Optional[str]) -> Optional[str]:
+    """Sanitize URL by stripping any embedded userinfo, credentials, query parameters, or fragments."""
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port_suffix = f":{parts.port}" if parts.port and parts.port not in (80, 443) else ""
+        path = parts.path.rstrip("/")
+        return f"{parts.scheme}://{host}{port_suffix}{path}"
+    except Exception:
+        return "[SANITIZED]"
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,
@@ -19,13 +34,12 @@ logger = logging.getLogger("agent_runtime.api.health")
     summary="Application liveness and configuration check",
 )
 def get_health(settings: Settings = Depends(get_settings)) -> HealthResponse:
-    """Return backend process liveness and sanitized model configuration status."""
+    """Return backend process liveness and model configuration status without internal endpoint coordinates."""
     return HealthResponse(
         status="healthy",
         version="0.1.0",
         model_configured=settings.is_model_configured,
         model_id=settings.agent_model_name if settings.is_model_configured else None,
-        model_endpoint=settings.agent_model_base_url if settings.is_model_configured else None,
     )
 
 
@@ -46,8 +60,7 @@ async def check_readiness(settings: Settings = Depends(get_settings)) -> ModelRe
         )
 
     endpoint = settings.agent_model_base_url
-    # Sanitize URL for presentation
-    sanitized_url = endpoint or ""
+    sanitized_url = sanitize_endpoint_url(endpoint)
     probe_url = f"{endpoint}/models"
 
     headers = {}

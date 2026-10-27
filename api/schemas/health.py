@@ -6,7 +6,11 @@ from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
-    """Liveness and basic system health status response."""
+    """Liveness and basic system health status response.
+    
+    Omits internal infrastructure details (such as model endpoints) to prevent
+    information leakage in public/unauthenticated probes.
+    """
 
     status: Literal["healthy", "degraded", "unhealthy"] = Field(
         default="healthy",
@@ -28,10 +32,6 @@ class HealthResponse(BaseModel):
         default=None,
         description="Configured model identifier (if configured)",
     )
-    model_endpoint: Optional[str] = Field(
-        default=None,
-        description="Sanitized base URL of the model endpoint",
-    )
 
 
 class ModelReadinessResponse(BaseModel):
@@ -47,7 +47,7 @@ class ModelReadinessResponse(BaseModel):
     )
     endpoint: Optional[str] = Field(
         default=None,
-        description="Sanitized endpoint address",
+        description="Sanitized host and path of model endpoint (credentials and query parameters stripped)",
     )
     message: str = Field(
         ...,
