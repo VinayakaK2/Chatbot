@@ -1,59 +1,112 @@
 # Coding Agent Runtime
 
-A minimal, runnable coding-agent harness designed around one boundary: the model may propose actions; the deterministic runtime validates, authorizes, executes, records, and bounds them.
+A modular, web-GUI-first coding agent runtime architecture separating model decisions from deterministic runtime enforcement.
 
-It intentionally focuses on the first production-critical vertical slice:
+- **Architecture Reference:** `2604.14228v3.pdf` ("Dive into Claude Code: The Design Space of Today's and Future AI Agent Systems")
+- **Implementation Plan:** `docs/phases.md`
+- **Target Model:** `Qwen/Qwen2.5-Coder-14B-Instruct-AWQ`
+- **Model Serving Pipeline:** Google Colab → vLLM → OpenAI-compatible API → Python Backend → React GUI
 
-- a bounded model/tool loop;
-- flat agent declarations in `agents/*.md` with YAML frontmatter;
-- bounded context assembly from task plus recent persisted evidence;
-- workspace-contained read, write, and shell tools;
-- deny-by-default gates for writes and shell commands;
-- append-only JSONL session histories in `.agent-runtime/sessions/`;
-- an optional OpenAI-compatible provider configured only through environment variables;
-- a deterministic no-credential demo and unit tests.
+---
 
-## Quick start
-
-Python 3.11+ is sufficient; the runtime has no third-party runtime dependencies.
-
-```powershell
-python -m unittest discover -s tests -v
-python -m coding_agent_runtime --demo
-```
-
-The demo reads the agent specification, writes an event history under `.agent-runtime/sessions/`, and performs no writes or shell execution.
-
-## Live model configuration
-
-Copy `.env.example` to a local, ignored `.env` only if your launcher loads it, or export these values through your normal secret manager:
+## Architecture Overview
 
 ```text
-AGENT_MODEL_BASE_URL=https://your-compatible-api.example/v1
-AGENT_MODEL_API_KEY=...
-AGENT_MODEL_NAME=...
+React + TypeScript GUI (Port 5173)
+          |  (HTTP API / Local Proxy)
+          v
+FastAPI Routes (/api/health, /api/readiness, /api/tasks)
+          |
+          v
+     Task Service
+          |
+          v
+Model Provider Interface (core/model_provider.py)
+          |
+          v
+OpenAI-Compatible Adapter (core/vllm_adapter.py)
+          |
+          v
+   vLLM Endpoint (Colab Tunnel)
 ```
 
-Then run the selected agent. The runtime does not load `.env` itself, does not invent credentials, and requires all three variables:
+**Security Boundaries:**
+- The model proposes actions; the deterministic runtime validates and enforces all limits.
+- The browser GUI never communicates directly with the external model endpoint.
+- Model credentials and URLs remain on the server and are scrubbed from diagnostic outputs and logs.
+
+---
+
+## Prerequisites
+
+- **Python:** 3.11+ (installed via Python launcher or virtualenv)
+- **Node.js:** 20+ (Node v24.15.0 and npm 11.12.1 tested)
+- **Package Managers:** `uv` for Python virtual environment; `npm` for frontend
+
+---
+
+## Quick Start (Windows / PowerShell)
+
+### 1. Environment & Backend Setup
+
+From repository root (`H:\chatbot`):
 
 ```powershell
-$env:AGENT_MODEL_BASE_URL = "https://your-compatible-api.example/v1"
-$env:AGENT_MODEL_API_KEY = "<secret from your secret manager>"
-$env:AGENT_MODEL_NAME = "your-model-name"
-python -m coding_agent_runtime "Inspect this repository and summarize its tests."
+# Install backend dependencies
+uv pip install -e .
+
+# Run automated backend test suite
+uv run pytest
 ```
 
-Writes and shell commands remain denied unless explicitly enabled for that invocation:
+### 2. Frontend Installation & Build
 
 ```powershell
-python -m coding_agent_runtime "Add a focused unit test." --allow-writes
-python -m coding_agent_runtime "Run the unit tests." --allow-shell
+# Install frontend npm dependencies
+npm --prefix frontend install
+
+# Build frontend production bundle
+npm --prefix frontend run build
 ```
 
-Those switches are deliberately separate. A real deployment should replace the CLI decision with a UI or policy service that supplies `PermissionPolicy.approval_callback` per operation.
+### 3. Launching Services
 
-## Design and limitations
+**Terminal 1 — Backend API Server:**
+```powershell
+uv run python main.py
+# Server binds to http://127.0.0.1:8000
+```
 
-`AgentOrchestrator` is the only loop owner. It sends assembled context to a provider, records the proposal, verifies the selected agent's allowlist, dispatches a deterministic tool, records the observation, and repeats until completion or `--max-turns` (12 by default). Tool results become evidence for the next turn; they are not trusted model claims.
+**Terminal 2 — Frontend GUI Development Server:**
+```powershell
+npm --prefix frontend run dev
+# Vite runs at http://localhost:5173 with proxy to backend
+```
 
-This first slice is intentionally not a sandbox, shell command classifier, remote-session service, planner, subagent framework, or UI. Shell execution is therefore opt-in and should be used only in a trusted workspace. The next safe increments are a stronger OS/container sandbox, structured interactive approvals, streaming provider support, richer compaction, and a separate evaluator pass.
+---
+
+## Configuration
+
+Copy `.env.example` to `.env` (or configure PowerShell environment variables):
+
+```powershell
+$env:HOST = "127.0.0.1"
+$env:PORT = "8000"
+$env:AGENT_MODEL_BASE_URL = "https://your-tunnel.trycloudflare.com/v1"
+$env:AGENT_MODEL_API_KEY = "sk-agent-runtime-colab-sec"
+$env:AGENT_MODEL_NAME = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
+```
+
+If `AGENT_MODEL_BASE_URL` is omitted, the runtime operates safely in unconfigured/offline mode without failing startup.
+
+---
+
+## Verification Commands
+
+| Component | Command | Expected Result |
+|---|---|---|
+| Backend Tests | `uv run pytest` | All 18+ tests pass |
+| Frontend Build | `npm --prefix frontend run build` | Zero TypeScript/build errors |
+| Health Probe | `Invoke-RestMethod http://127.0.0.1:8000/api/health` | HTTP 200 with health schema |
+| Readiness Probe | `Invoke-RestMethod http://127.0.0.1:8000/api/readiness` | HTTP 200 with connectivity state |
+| Task Submission | `Invoke-RestMethod http://127.0.0.1:8000/api/tasks -Method Post -Body '{"prompt":"Hello"}' -ContentType "application/json"` | HTTP 201 with TaskResponse |

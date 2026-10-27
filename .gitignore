@@ -1,14 +1,36 @@
+# Python artifacts
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.agent-runtime/
-.test-artifacts/
-.venv/
-node_modules/
-.env
-.env.*
-!.env.example
+*$py.class
 *.egg-info/
 build/
 dist/
 *.egg
+
+# Testing & Cache
+.pytest_cache/
+.agent-runtime/
+.test-artifacts/
+.coverage
+htmlcov/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.npm/
+
+# Environment and Secrets (Never commit .env files containing real keys)
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+logs/
