@@ -1,0 +1,31 @@
+Main Agent (Orchestrator) — Claude Code ka core role
+Jab aap claude run karte ho, jo session chalta hai wahi main conversation/main agent hai. Ye khud model (Claude) hai jo reasoning karta hai aur Claude Code ka "harness" uske around tools provide karta hai — yehi poora setup "agentic loop" kehlata hai. How Claude Code works
+
+1. Agentic loop — core working cycle
+Main agent 3 phases mein cycle karta hai, jab tak task complete na ho:
+
+Gather context — files padhna, search karna, codebase samajhna
+Take action — code edit, command run, web search
+Verify — tests chalana, output check karna
+Har tool-use ka result feedback deta hai, aur agent decide karta hai next step kya hoga — khud hi chain of actions banata hai.
+
+2. Direct capabilities (built-in tools)
+Main agent khud ye categories ke tools use karta hai: File ops (Read/Edit/Write), Search (Glob/Grep), Execution (Bash/PowerShell), Web (WebSearch/WebFetch), Code intelligence (LSP). Poori list: Tools reference.
+
+3. Orchestration — subagents spawn karna
+Jab task bada ho ya side-exploration se main context "flood" ho jaaye, main agent Agent tool use karke subagent spawn karta hai:
+
+Subagent apne alag context window mein kaam karta hai, result sirf summary ke roop mein wapas aata hai — intermediate tool calls main conversation mein nahi dikhte.
+Built-in subagents: Explore (codebase samajhna, read-only) aur Plan (plan mode mein research).
+Custom subagents: .claude/agents/ mein define karke specific role/tools/system-prompt wale worker bana sakte ho.
+Tools inheritance: subagent by default parent ke tools/MCP tools inherit karta hai, lekin kuch tools (Agent depth-limit pe, AskUserQuestion, ExitPlanMode etc.) filter ho jaate hain, especially background subagents mein.
+Permissions: subagent ke tool calls bhi permission rules se check hote hain — foreground mein prompts aapko turant dikhte hain, background mein main session mein surface hote hain.
+4. Agent Teams (multi-agent orchestration)
+Main agent "teammates" bhi spawn kar sakta hai (natural language instruction se) jo parallel kaam karte hain aur SendMessage se communicate karte hain — ye ek step aage ka orchestration hai, normal subagent se zyada autonomous.
+
+5. Context management
+Orchestrator ka ek bada role context control karna hai: subagents ka verbose output (logs, search results) apne context mein hi rehta hai, sirf summary wapas aata hai — isse main agent ka context window saaf rehta hai.
+
+Create custom subagents
+Tools reference
+Agent teams
