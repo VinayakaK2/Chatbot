@@ -2,7 +2,7 @@
 
 - **Project:** Chatbot — Agent Runtime
 - **Module:** Phase 3 — Agent Execution Loop
-- **Status:** Architectural Specification & Design Authority
+- **Status:** Architectural Specification & Design Authority (FROZEN — Operator Approved: 2026-11-14, SHA: `454342d95cee21bbd38099f4a67f720029983bfa`)
 - **Authority:** `sources/2604.14228v3.pdf` (Sections 3.5, 4.1, 4.2, 4.4, 4.5, 5), `docs/phases.md`, `AGENTS.md`
 - **Date:** 2026-11-14
 

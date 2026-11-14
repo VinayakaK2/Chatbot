@@ -127,22 +127,22 @@ Runtime Orchestrator  <---- task lifecycle, budgets, cancellation, terminal stat
 
 ## 5. Phase overview
 
-| Phase | Name | Main deliverable | Depends on |
-|---|---|---|---|
-| 0 | Repository, API/UI shell, and development foundation | Reproducible backend + minimal web GUI skeleton + test workflow | None |
-| 1 | Model adapter and task API | API can reach vLLM and expose a safe model-connectivity/task status contract | 0 |
-| 2 | Typed tool contracts and registry | Tools can be registered, described, validated, and looked up | 0 |
-| 3 | Agent execution loop and live events | Model ↔ tool ↔ result cycle, streamed to GUI with bounded stopping behavior | 1, 2 |
-| 4 | Workspace and filesystem tools | Safe project exploration and controlled file changes | 2, 3 |
-| 5 | Shell, approvals, and permissions | Explicit policy enforcement and bounded command execution | 2, 3, 4 |
-| 6 | Context management | Bounded, relevant context without destroying source history | 3 |
-| 7 | Persistent state and session recovery | SQLite-backed sessions/tasks/tool records and safe resume | 3, 6 |
-| 8 | Reliability and observability | Timeouts, cancellation, bounded retries, diagnostics, and evidence | 3–7 |
-| 9 | Skills and specialist registry | Validated Markdown agent definitions and scoped capabilities | 2, 6–8 |
-| 10 | Manager-led orchestration | Plan, assign, sequence, review, retry, escalate, and terminate | 7–9 |
-| 11 | MCP integrations | External tools behind the same policy and execution contracts | 5, 8 |
-| 12 | Organization console and richer GUI | Expand the existing GUI with specialist/team views; API already exists | 7–11 |
-| 13 | Release hardening | End-to-end verification, docs, recovery and security checks | Relevant phases complete |
+| Phase | Name | Main deliverable | Depends on | Status |
+|---|---|---|---|---|
+| 0 | Repository, API/UI shell, and development foundation | Reproducible backend + minimal web GUI skeleton + test workflow | None | Complete (`ffdbd36`) |
+| 1 | Model adapter and task API | API can reach vLLM and expose a safe model-connectivity/task status contract | 0 | Complete (`8f589f7`) |
+| 2 | Typed tool contracts and registry | Tools can be registered, described, validated, and looked up | 0 | FROZEN (`34ede8b`) |
+| 3 | Agent execution loop and live events | Model ↔ tool ↔ result cycle, streamed to GUI with bounded stopping behavior | 1, 2 | **FROZEN** (Operator Approved: 2026-11-14, SHA: `454342d95cee21bbd38099f4a67f720029983bfa`) |
+| 4 | Workspace and filesystem tools | Safe project exploration and controlled file changes | 2, 3 | Ready for Implementation (Awaiting Operator Start) |
+| 5 | Shell, approvals, and permissions | Explicit policy enforcement and bounded command execution | 2, 3, 4 | Planned |
+| 6 | Context management | Bounded, relevant context without destroying source history | 3 | Planned |
+| 7 | Persistent state and session recovery | SQLite-backed sessions/tasks/tool records and safe resume | 3, 6 | Planned |
+| 8 | Reliability and observability | Timeouts, cancellation, bounded retries, diagnostics, and evidence | 3–7 | Planned |
+| 9 | Skills and specialist registry | Validated Markdown agent definitions and scoped capabilities | 2, 6–8 | Planned |
+| 10 | Manager-led orchestration | Plan, assign, sequence, review, retry, escalate, and terminate | 7–9 | Planned |
+| 11 | MCP integrations | External tools behind the same policy and execution contracts | 5, 8 | Planned |
+| 12 | Organization console and richer GUI | Expand the existing GUI with specialist/team views; API already exists | 7–11 | Planned |
+| 13 | Release hardening | End-to-end verification, docs, recovery and security checks | Relevant phases complete | Planned |
 
 Phases can be refined after repository inspection. Do not create empty modules for all future phases in Phase 0; add each module when its contract is understood and tested.
 
@@ -280,6 +280,17 @@ Tools can be registered and described without being coupled to the model request
 
 # Phase 3 — Agent execution loop
 
+**Status:** FROZEN (Operator Approved)  
+**Approval Date:** 2026-11-14  
+**Frozen Git SHA:** `454342d95cee21bbd38099f4a67f720029983bfa`  
+**Authoritative Evidence Artifacts:**
+- Final Acceptance Audit: [`docs/reports/phase-3-final-acceptance-audit.md`](reports/phase-3-final-acceptance-audit.md)
+- Independent Concurrency Audit (F-02 Invariant Verification): [`docs/reports/phase-3-f02-independent-audit.md`](reports/phase-3-f02-independent-audit.md)
+- Followup Remediation Report: [`docs/reports/phase-3-f02-followup-remediation-report.md`](reports/phase-3-f02-followup-remediation-report.md)
+- Concurrency Change Impact Analysis: [`docs/reports/phase-3-f02-followup-change-impact-analysis.md`](reports/phase-3-f02-followup-change-impact-analysis.md)
+- Architectural Decision Record: [`docs/adr/0003-agent-execution-loop.md`](adr/0003-agent-execution-loop.md)
+- Architectural Specification: [`docs/agent-execution-loop.md`](agent-execution-loop.md)
+
 ## Goal
 
 Implement the core model → tool request → execution result → model cycle with bounded, explicit termination.
@@ -319,6 +330,20 @@ Implement the core model → tool request → execution result → model cycle w
 ## Exit gate
 
 A controlled mock model can drive a full multi-turn tool cycle. Do not add unrestricted shell access to prove the loop.
+
+### Exit Gate & Freeze Record
+- **Gate Evaluation:** PASSED.
+- **Verification Summary:**
+  - 12/12 Phase 3 requirements mapped and verified in source code.
+  - 274 offline backend tests passing (`.venv\Scripts\python.exe -m pytest --ignore=tests/test_smoke_live.py`).
+  - 38 concurrency and race interleaving tests passing (`tests/test_task_concurrency.py`).
+  - Defect F-02 verified remediated in `core/task_service.py` (strict Level 1 `task_lock` -> Level 2 `_registry_lock` order, `EventSubscriber` isolation, `call_soon_threadsafe`, ghost lock prevention, first-to-commit linearizability).
+  - Web GUI test suite passing with 35/35 tests in 2.65s (`npm --prefix frontend test -- --run`).
+  - Frontend production build passed cleanly in 0.30s (`npm --prefix frontend run build`).
+  - Frontend lint clean with 0 errors (`npm --prefix frontend run lint`).
+- **Formal Freeze Decision:** APPROVED by Operator on 2026-11-14.
+- **Frozen Commit Baseline:** `454342d95cee21bbd38099f4a67f720029983bfa`.
+- **Integrity Boundary:** Phase 3 implementation is frozen. Zero regressions or modifications permitted in Phase 3 files. Phase 4 implementation requires separate operator authorization.
 
 ---
 
@@ -1169,4 +1194,16 @@ A phase is complete only when:
 - actual commands and outcomes are recorded;
 - remaining limitations are explicit.
 
-**Current status:** This file is a build plan. It does not assert that any phase has been implemented or tested. The product is GUI-first; any CLI is optional and must not become the main interaction surface.
+**Current status:** Active build plan with completed and frozen phases documented below. The product is GUI-first; any CLI is optional and must not become the main interaction surface.
+
+---
+
+## 10. Phase Freeze History & Decision Ledger
+
+| Phase | Phase Name | Status | Approval Date | Frozen Git SHA | Authoritative Audit Report |
+|:---:|:---|:---:|:---:|:---:|:---|
+| **0** | Repository & Dev Foundation | Baseline Complete | 2026-10-27 | `ffdbd36` | [`docs/reports/phase-0-1-implementation-report.md`](reports/phase-0-1-implementation-report.md) |
+| **1** | Model Adapter & Task API | Verified Complete | 2026-10-27 | `8f589f7` | [`docs/reports/phase-0-1-implementation-report.md`](reports/phase-0-1-implementation-report.md) |
+| **2** | Typed Tool Contracts & Registry | Frozen | 2026-11-14 | `34ede8b` | [`docs/reports/phase-2-independent-final-audit.md`](reports/phase-2-independent-final-audit.md) |
+| **3** | Agent Execution Loop & Live Events | **FROZEN** | 2026-11-14 | `454342d95cee21bbd38099f4a67f720029983bfa` | [`docs/reports/phase-3-final-acceptance-audit.md`](reports/phase-3-final-acceptance-audit.md) |
+| **4** | Workspace & Filesystem Tools | Ready for Implementation | Pending | Pending | Pending Operator Start Authorization |

@@ -1,6 +1,6 @@
 # ADR 0003: Reactive Multi-Turn Agent Execution Loop, Tool Dispatcher, and Explicit State Machine
 
-- **Status:** Accepted
+- **Status:** Accepted & Frozen (Operator Approved at commit `454342d95cee21bbd38099f4a67f720029983bfa` on 2026-11-14)
 - **Deciders:** Senior Staff Software Engineer, AI-Runtime Architect, Security Engineer
 - **Date:** 2026-11-14
 - **Context:** Agent Runtime Project (Phase 3 — Agent Execution Loop)
