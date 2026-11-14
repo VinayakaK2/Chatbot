@@ -22,8 +22,8 @@
 | Phase 6 Initiation | **NO** (Phase 6 has NOT been started) |
 | Regressions | **0 Regressions** across all Phase 0–4 contracts |
 | Backend Test Count | **438 passed, 1 skipped, 1 warning** (100% passing) |
-| Frontend Test Count | **49 passed** (100% passing) |
-| Build & Lint Status | **Clean build** (333ms), **0 lint errors** |
+| Frontend Test Count | **50 passed** (100% passing across 10 test files) |
+| Build & Lint Status | **Clean build** (333ms), **0 lint errors** (10 React Compiler notices) |
 
 ---
 
@@ -171,6 +171,7 @@ This terminates the entire process tree recursively upon timeout or cancellation
 2. **NTFS Case-Preservation & Canonicalization:** Uses `os.path.realpath` to resolve case variations and directory junctions.
 3. **Environment Allowlist (`SAFE_ENV_VARS`):** Isolates the subprocess environment to 18 essential Windows variables (`SYSTEMROOT`, `PATH`, `TEMP`, `COMSPEC`, `PATHEXT`, `WINDIR`, etc.) plus virtual environment paths (`VIRTUAL_ENV`), stripping host API tokens.
 4. **Symlink Traversal Limitation (P5-LIMIT-02):** Documented that Windows non-elevated developer accounts skip administrative symlink tests unless Developer Mode is enabled.
+5. **ExecutionPolicy Bypass Operational Limitation (P5-LIMIT-05):** The runner actively invokes `powershell.exe` with `-ExecutionPolicy Bypass` to allow local scripts (`.venv\Scripts\activate.ps1`, `npm.ps1`, CLI wrappers) on default Windows installations where the system policy is `Restricted`. This removes script-execution safety rails for that process and is an **accepted operational limitation**, NOT an OS sandbox. The tighter setting `-ExecutionPolicy RemoteSigned -Scope Process` is logged as a forward-looking recommendation, but has **NOT** been implemented in Phase 5 to avoid unverified regressions on local developer tooling.
 
 ---
 
@@ -216,13 +217,14 @@ Backend Test Coverage:
 - Skipped test: test_symlink_traversal_prevention (Windows non-elevated limitation)
 
 Frontend Test Coverage (npm --prefix frontend test -- --run):
-- 10 test files passed, 49 passed in 3.64s
+- 10 test files passed, 50 passed in 4.95s
+- Note on test count: 50 tests reflect the 5th test added to `FileViewerPanel.test.tsx` (`opens 3 dots menu and allows copying file content`) in commit `d757f53`.
 
 Frontend Build (npm --prefix frontend run build):
 - Built in 333ms, 0 errors, 0 warnings
 
 Frontend Linter (npx --prefix frontend oxlint):
-- 0 errors, 10 non-blocking notices (matches Phase 4 baseline)
+- 0 errors, 10 non-blocking notices (10 React Compiler optimization notices; 0 unused-variable errors)
 ```
 
 ---

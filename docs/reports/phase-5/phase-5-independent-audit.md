@@ -107,7 +107,7 @@ Ten independent specialist audit evaluations were conducted to cross-examine sou
 - **Evaluation Target:** Acceptance criteria verification, readiness for operator freeze.
 - **Findings:**
   - All 10 mandatory Phase 5 requirements from `docs/phases.md` are satisfied.
-  - Test suite passes 100% (438 backend tests, 49 frontend tests).
+  - Test suite passes 100% (438 backend tests, 50 frontend tests across 10 files).
   - Build and lint passes cleanly.
   - Clean git status across tracked files.
 - **Score:** 10 / 10 (Ready for Freeze).
@@ -121,6 +121,9 @@ Ten independent specialist audit evaluations were conducted to cross-examine sou
 | **OBS-02** (from Phase 3) | Concurrency / Thread-Safety | Approval store synchronization under concurrent operations | **RESOLVED:** `ApprovalManager` implemented with `threading.RLock` and thread-safe token consumption. |
 | **P5-LIMIT-01** | Security Boundary | Subprocess execution uses host OS process, not container | **DOCUMENTED:** Transparently documented in threat model and architecture docs as accepted host isolation limitation. |
 | **P5-LIMIT-02** | Platform Limitation | Symlink creation tests skipped on Windows without Developer Mode | **PRESERVED:** Accepted Phase 4 limitation maintained. |
+| **P5-LIMIT-03** | Grammar Limitation | Command filtering cannot semantically evaluate arbitrary PowerShell grammar | **DOCUMENTED:** Outer intent check only; safe dev tools can execute arbitrary code if passed as script args. |
+| **P5-LIMIT-04** | TOCTOU / Binding | Action hash binds arguments, not filesystem state | **DOCUMENTED:** Exact parameter binding; does not attest to script file contents on disk at launch. |
+| **P5-LIMIT-05** | Execution Policy | `ExecutionPolicy Bypass` removes script safety rails | **ACCEPTED LIMITATION:** Implemented with `Bypass` for `.venv` and npm scripts; tightening to `RemoteSigned` logged as future recommendation. |
 
 ---
 
