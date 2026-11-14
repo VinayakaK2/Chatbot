@@ -357,7 +357,7 @@
   border-radius: 50%;
   border: 1.75px solid rgba(255, 255, 255, 0.15);
   border-top-color: var(--accent-primary);
-  animation: spin 0.75s linear infinite;
+  animation: spin 2.4s linear infinite;
   display: inline-block;
   flex-shrink: 0;
 }
@@ -1174,15 +1174,15 @@
   height: 6px;
   border-radius: 50%;
   background: var(--accent-primary);
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: pulse 2.2s ease-in-out infinite;
 }
 
 .executing-dot:nth-child(2) {
-  animation-delay: 0.2s;
+  animation-delay: 0.35s;
 }
 
 .executing-dot:nth-child(3) {
-  animation-delay: 0.4s;
+  animation-delay: 0.7s;
 }
 
 /* ==========================================================================
@@ -1454,15 +1454,15 @@
   height: 3.5px;
   border-radius: 50%;
   background-color: var(--text-muted);
-  animation: dot-pulse 1.4s ease-in-out infinite;
+  animation: dot-pulse 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 .working-dot:nth-child(2) {
-  animation-delay: 0.2s;
+  animation-delay: 0.35s;
 }
 
 .working-dot:nth-child(3) {
-  animation-delay: 0.4s;
+  animation-delay: 0.7s;
 }
 
 @keyframes dot-pulse {
@@ -1704,7 +1704,7 @@
   border: 2px solid rgba(255, 255, 255, 0.2);
   border-top-color: var(--color-warning);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin 2.2s linear infinite;
   display: inline-block;
 }
 
@@ -2614,7 +2614,7 @@
 
 .status-pill.checking .status-pill-dot {
   background: var(--color-warning);
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: pulse 2.2s ease-in-out infinite;
 }
 
 /* Badge component */
@@ -2759,16 +2759,16 @@
 }
 
 .icon-spin {
-  animation: spin 1s linear infinite;
+  animation: spin 2.2s linear infinite;
 }
 
 @keyframes shimmer {
   from {
-    opacity: 0.4;
+    opacity: 0.35;
   }
 
   to {
-    opacity: 0.9;
+    opacity: 0.95;
   }
 }
 
@@ -2776,7 +2776,7 @@
   content: '▍';
   display: inline-block;
   color: var(--accent-primary);
-  animation: shimmer 0.7s ease-in-out infinite alternate;
+  animation: shimmer 1.6s ease-in-out infinite alternate;
   margin-left: 1px;
   vertical-align: -1px;
   font-size: 0.85em;

@@ -217,24 +217,33 @@ export function useTaskStream(
           usage: taskResponse.usage || undefined,
         }))
 
-        // Step 3: Stream tokens continuously in real time (chunk by chunk / word by word)
+        // Step 3: Stream tokens continuously with natural, readable pacing
         if (fullText && !taskResponse.error) {
           isStreamingRef.current = true
+          // Brief natural pause (~600ms) so "Working" state is established comfortably
+          await new Promise((resolve) => setTimeout(resolve, 600))
+          if (isCancelledRef.current) return
+
           // Break into word tokens with trailing punctuation/space
           const tokens = fullText.match(/\S+\s*|\s+/g) || [fullText]
-          // Dynamic interval: 10ms to 24ms per token for natural, lively typing pace
-          const delayMs = Math.max(10, Math.min(24, Math.floor(1500 / tokens.length)))
+          // Calm, comfortable reading cadence (~38ms per token)
+          const baseDelayMs = 38
 
           let accumulated = ''
           for (let i = 0; i < tokens.length; i++) {
             if (isCancelledRef.current) break
-            accumulated += tokens[i]
+            const token = tokens[i]
+            accumulated += token
             onUpdateMessage(assistantMessageId, (msg) => ({
               ...msg,
               content: accumulated,
               status: 'executing',
             }))
-            await new Promise((resolve) => setTimeout(resolve, delayMs))
+
+            // Slight natural cadence pause on punctuation and line breaks
+            const hasPunctuation = /[.!?:\n]$/.test(token.trim())
+            const pause = hasPunctuation ? baseDelayMs + 45 : baseDelayMs
+            await new Promise((resolve) => setTimeout(resolve, pause))
           }
           isStreamingRef.current = false
         }
