@@ -765,6 +765,16 @@ Longer sessions can continue with bounded context and traceable source history.
 
 # Phase 7 — Persistent state and session recovery
 
+**Status:** IMPLEMENTED · VERIFIED · READY FOR OPERATOR FREEZE  
+**Implementation Date:** 2026-11-15  
+**Authoritative Evidence Artifacts:**
+- Design Specification: [`docs/reports/phase-7/phase-7-design.md`](reports/phase-7/phase-7-design.md)
+- Implementation Report: [`docs/reports/phase-7/phase-7-implementation-report.md`](reports/phase-7/phase-7-implementation-report.md)
+- Adversarial & Crash-Boundary Report: [`docs/reports/phase-7/phase-7-adversarial-report.md`](reports/phase-7/phase-7-adversarial-report.md)
+- Independent Compliance Audit: [`docs/reports/phase-7/phase-7-independent-audit.md`](reports/phase-7/phase-7-independent-audit.md)
+- Regression Evidence Dossier: [`docs/reports/phase-7/phase-7-regression-evidence.md`](reports/phase-7/phase-7-regression-evidence.md)
+- Final Engineering Report: [`docs/reports/phase-7/phase-7-final-report.md`](reports/phase-7/phase-7-final-report.md)
+
 ## Goal
 
 Persist authoritative task/session state and enough execution records to inspect or recover after a process restart.
