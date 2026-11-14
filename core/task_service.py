@@ -12,12 +12,13 @@ from api.schemas.events import RuntimeEvent, RuntimeEventType
 from api.schemas.tasks import TaskCreateRequest, TaskResponse, TaskStatus
 from core.agent_loop import AgentExecutionRequest, AgentLoop, DEFAULT_SYSTEM_PROMPT
 from core.config import Settings, get_settings
+from core.approval import ApprovalManager, get_global_approval_manager
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
 from core.workspace import WorkspaceContext
 from model.contracts import ModelError, ModelProvider
 from model.vllm_adapter import VLLMAdapter
-from tools.registry_setup import register_workspace_tools
+from tools.registry_setup import register_shell_tools, register_workspace_tools
 
 logger = logging.getLogger("agent_runtime.core.task_service")
 
@@ -53,13 +54,17 @@ class TaskService:
         tool_dispatcher: Optional[ToolDispatcher] = None,
         agent_loop: Optional[AgentLoop] = None,
         workspace_context: Optional[WorkspaceContext] = None,
+        approval_manager: Optional[ApprovalManager] = None,
         auto_register_tools: bool = True,
+        auto_register_shell_tools: bool = False,
     ) -> None:
         """Initialize the task service with model provider, registry, dispatcher, and agent loop."""
         self.settings = settings or get_settings()
         self.tool_registry = tool_registry or get_global_registry()
+        self.approval_manager = approval_manager or get_global_approval_manager()
         self.tool_dispatcher = tool_dispatcher or ToolDispatcher(
             registry=self.tool_registry,
+            approval_manager=self.approval_manager,
             default_timeout_seconds=self.settings.agent_tool_timeout_seconds,
         )
         self.workspace_context = workspace_context or (
@@ -71,6 +76,14 @@ class TaskService:
         # Register standard Phase 4 workspace tools into registry if enabled and not already present
         if auto_register_tools and not self.tool_registry.has("read_file"):
             register_workspace_tools(registry=self.tool_registry, workspace=self.workspace_context)
+        # Register Phase 5 shell tools if explicitly requested and not already present
+        if auto_register_shell_tools and not self.tool_registry.has("execute_command"):
+            register_shell_tools(
+                registry=self.tool_registry,
+                workspace=self.workspace_context,
+                default_timeout_seconds=self.settings.agent_tool_timeout_seconds,
+                extra_secrets=[self.settings.agent_model_api_key] if self.settings.agent_model_api_key else None,
+            )
 
         if model_provider is not None:
             self.model_provider: Optional[ModelProvider] = model_provider
@@ -530,6 +543,12 @@ class TaskService:
                 else:
                     token.set()
 
+            # Cancel any pending approval requests for this task in ApprovalManager
+            try:
+                self.approval_manager.cancel_requests_for_task(task_id)
+            except Exception as exc:
+                logger.debug("Error cancelling approval requests for task %s: %s", task_id, str(exc))
+
             # If task is already in a terminal state, return current record without modification
             if task.status in TERMINAL_STATUSES:
                 return task
@@ -576,13 +595,27 @@ class TaskService:
         reason: Optional[str] = None,
     ) -> bool:
         """Record human decision authority outcome on an eligible tool call."""
-        if task_id not in self._approvals:
-            self._approvals[task_id] = {}
-        self._approvals[task_id][call_id] = {
-            "approved": approved,
-            "reason": reason,
-            "decided_at": datetime.now(timezone.utc).isoformat(),
-        }
+        # 1. Resolve in ApprovalManager to unblock waiting async tool execution
+        try:
+            self.approval_manager.resolve_request(
+                call_id_or_request_id=call_id,
+                approved=approved,
+                reason=reason,
+                task_id=task_id,
+            )
+        except Exception as exc:
+            logger.debug("ApprovalManager resolution notice for task %s call %s: %s", task_id, call_id, str(exc))
+
+        # 2. Thread-safe internal record for task service
+        with self._registry_lock:
+            if task_id not in self._approvals:
+                self._approvals[task_id] = {}
+            self._approvals[task_id][call_id] = {
+                "approved": approved,
+                "reason": reason,
+                "decided_at": datetime.now(timezone.utc).isoformat(),
+            }
+
         event_type = RuntimeEventType.TOOL_REQUESTED if approved else RuntimeEventType.PERMISSION_DENIED
         self._record_event(
             task_id=task_id,

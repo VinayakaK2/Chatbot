@@ -467,6 +467,28 @@ Provide a deliberately constrained way to run tests and development commands, wi
 
 The runtime can execute approved project checks while denying unapproved actions and reporting incomplete isolation honestly.
 
+### Phase 5 Implementation & Readiness Summary
+- **Implementation Status:** COMPLETE — READY FOR OPERATOR AUDIT & FREEZE REVIEW (Not yet frozen).
+- **Core Verification Summary:**
+  - `core/permissions.py`: Deny-first command evaluator (`DENY > ASK > ALLOW`), hard-denying 8 destructive/system categories and defaulting unclassified commands to fail-closed `DENY`.
+  - `core/approval.py`: In-memory volatile approval manager (`ApprovalManager`), exact-action cryptographic binding via SHA-256 (`action_hash`), single-use token consumption (`CONSUMED`), and thread-safe synchronization (resolving OBS-02). Zero transcript/database persistence across restarts (compliant with 2604.14228v3.pdf §9.2).
+  - `tools/shell.py`: PowerShell runner with canonical working directory containment (`os.path.commonpath`), sanitized environment variable allowlist, bounded output (65,536 chars), recursive process-tree termination via Windows `taskkill.exe /F /T /PID`, and secret redaction.
+  - `core/tool_dispatcher.py` & `core/agent_loop.py`: Integrated approval waiting loop, emitting `RuntimeEventType.APPROVAL_NEEDED` and `RuntimeEventType.PERMISSION_DENIED` events over SSE.
+- **Verification Evidence:**
+  - 438/439 backend tests passing (`.venv\Scripts\python.exe -m pytest --ignore=tests/test_smoke_live.py`).
+  - 1 skipped test (Windows administrative symlink test, documented in Phase 4 freeze).
+  - 107 new Phase 5 tests passing (84 permission tests, 10 approval tests, 13 shell tests).
+  - Zero regressions across 331 existing Phase 0–4 tests.
+  - 49/49 frontend Vitest tests passing (`npm --prefix frontend test`).
+  - Frontend production build passing (`tsc -b && vite build` in 258ms).
+  - Frontend linter passing with 0 errors, 10 non-blocking compiler notices (`npm --prefix frontend run lint`).
+  - 33 adversarial test vectors verified against command chaining, metacharacters, path traversal, process loops, and secret leakage (`docs/reports/phase-5/phase-5-security-verification-matrix.md`).
+- **Deliberate Accepted Limitations & Qualifications:**
+  - *Host Subprocess Boundary:* The runner executes inside a constrained host PowerShell subprocess, not an OS-level hypervisor or container sandbox. Host isolation relies on cwd path validation and environment variable sanitization.
+  - *Volatile Approvals:* Approvals exist only in process memory and expire on process termination; no approvals survive a server restart.
+  - *Single-Process Concurrency:* Approval state synchronization uses in-memory locks (`threading.RLock`); cross-process synchronization is not supported.
+- **Next Step:** Independent Operator Audit & Freeze Review. Do NOT start Phase 6 without explicit operator authorization.
+
 ---
 
 # Tool inventory, registry, skills, hooks, and MCP policy

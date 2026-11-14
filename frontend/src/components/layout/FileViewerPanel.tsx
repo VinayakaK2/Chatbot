@@ -15,9 +15,14 @@ import {
   IconCheck,
   IconCopy,
   IconDiff,
+  IconDocument,
   IconFile,
   IconFileCode,
+  IconMaximize,
+  IconMoreVertical,
   IconPlus,
+  IconRefresh,
+  IconSplit,
   IconTerminal,
   IconX,
 } from '../common/Icons'
@@ -47,18 +52,28 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   onClose,
   activeTabId: externalActiveTabId,
   initialTabs,
+  onOpenDiff,
 }) => {
   const [tabs, setTabs] = useState<FileViewerTab[]>(() => {
     if (initialTabs && initialTabs.length > 0) return initialTabs
-    // Default initial tab
+    // Default initial tabs matching Image 2
     return [
       {
-        id: 'phase-4-test-evidence',
-        title: 'phase-4-test-evidence.md',
-        path: 'docs/reports/phase-4-test-evidence.md',
-        type: 'markdown',
-        language: 'markdown',
-        content: '# Loading evidence report...',
+        id: 'agent_loop.py',
+        title: 'agent_loop.py',
+        path: 'core/agent_loop.py',
+        type: 'code',
+        language: 'python',
+        content: '# Loading core/agent_loop.py...',
+      },
+      {
+        id: 'powershell.exe',
+        title: 'powershell.exe',
+        path: 'powershell.exe',
+        type: 'terminal',
+        language: 'shell',
+        content:
+          'PS H:\\chatbot> pytest tests/\n============================= test session starts =============================\nplatform win32 -- Python 3.14.6, pytest-8.3.5\ncollected 325 items\n\ntests/test_task_concurrency.py ......................................   [ 11%]\ntests/test_agent_loop.py .................                              [ 16%]\ntests/test_tool_dispatcher.py ..............                             [ 20%]\ntests/test_workspace_security.py ..................                     [ 26%]\ntests/test_filesystem.py ..............                                 [ 30%]\ntests/test_filesystem_integration.py ...........                       [ 33%]\n\n============================= 325 passed in 4.91s =============================',
       },
     ]
   })
@@ -68,6 +83,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   )
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [copied, setCopied] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
   const [availableDocs, setAvailableDocs] = useState<{ path: string; name: string }[]>([])
   const [isLoadingFile, setIsLoadingFile] = useState(false)
@@ -104,7 +120,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   // Fetch content for tabs that need content loaded
   useEffect(() => {
     const activeTab = tabs.find((t) => t.id === activeTabId)
-    if (activeTab && activeTab.type === 'markdown' && activeTab.content.startsWith('# Loading')) {
+    if (
+      activeTab &&
+      (activeTab.type === 'markdown' || activeTab.type === 'code') &&
+      activeTab.content.startsWith('# Loading')
+    ) {
       setIsLoadingFile(true)
       apiClient
         .getFileContent(activeTab.path)
@@ -139,6 +159,31 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
         .finally(() => setIsLoadingFile(false))
     }
   }, [activeTabId, tabs])
+
+  const handleReloadActiveFile = () => {
+    const activeTab = tabs.find((t) => t.id === activeTabId)
+    if (!activeTab || activeTab.type === 'terminal' || activeTab.type === 'diff') return
+    setIsLoadingFile(true)
+    apiClient
+      .getFileContent(activeTab.path)
+      .then((res) => {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === activeTab.id
+              ? {
+                  ...t,
+                  content: res.content,
+                  language: res.language,
+                }
+              : t
+          )
+        )
+      })
+      .catch((err) => {
+        console.warn('Failed to reload file content', err)
+      })
+      .finally(() => setIsLoadingFile(false))
+  }
 
   // Close picker on click outside
   useEffect(() => {
@@ -237,7 +282,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
 
   return (
     <aside
-      className="file-viewer-split-pane"
+      className={`file-viewer-split-pane ${isFullscreen ? 'is-fullscreen' : ''}`}
       role="complementary"
       aria-label="Files and Git Diff Viewer Panel"
     >
@@ -263,7 +308,9 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
               >
                 {/* Tab Icon Badge */}
                 <span className="file-tab-badge">
-                  {tab.type === 'markdown' ? (
+                  {tab.language === 'python' || tab.path.endsWith('.py') ? (
+                    <span className="badge-python-glyph" title="Python">🐍</span>
+                  ) : tab.type === 'markdown' ? (
                     <span className="badge-md-glyph">M↓</span>
                   ) : tab.type === 'diff' ? (
                     <IconDiff size={13} color="var(--color-primary)" />
@@ -328,8 +375,18 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           </div>
         </div>
 
-        {/* Top Right Panel Controls */}
+        {/* Top Right Panel Controls (Fullscreen, Split/Popout, Close) */}
         <div className="file-viewer-top-actions">
+          <button
+            type="button"
+            className="panel-tool-btn"
+            onClick={() => setIsFullscreen((prev) => !prev)}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen'}
+            aria-label="Toggle Fullscreen"
+          >
+            <IconMaximize size={14} />
+          </button>
+
           <button
             type="button"
             className="panel-tool-btn"
@@ -365,8 +422,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
                   idx === breadcrumbParts.length - 1 ? 'is-filename' : ''
                 }`}
               >
+                {idx === breadcrumbParts.length - 1 && (activeTab?.language === 'python' || activeTab?.path.endsWith('.py')) && (
+                  <span className="breadcrumb-icon-badge python" aria-hidden="true">🐍</span>
+                )}
                 {idx === breadcrumbParts.length - 1 && activeTab?.type === 'markdown' && (
-                  <span className="breadcrumb-icon-badge">M↓</span>
+                  <span className="breadcrumb-icon-badge" aria-hidden="true">M↓</span>
                 )}
                 {part}
               </span>
@@ -395,14 +455,47 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             </div>
           )}
 
+          {/* Three Dots More button */}
           <button
             type="button"
             className="breadcrumb-icon-btn"
-            onClick={handleCopyContent}
-            title={copied ? 'Copied!' : 'Copy file'}
-            aria-label="Copy file content"
+            title="More Options"
+            aria-label="More Options"
           >
-            {copied ? <IconCheck size={13} color="var(--color-success)" /> : <IconCopy size={13} />}
+            <IconMoreVertical size={13} />
+          </button>
+
+          {/* Paper Icon (Diff review) */}
+          <button
+            type="button"
+            className="breadcrumb-icon-btn"
+            onClick={onOpenDiff}
+            title="Review Git Diff"
+            aria-label="Review Git Diff"
+          >
+            <IconDocument size={13} />
+          </button>
+
+          {/* Refresh active file content */}
+          <button
+            type="button"
+            className="breadcrumb-icon-btn"
+            onClick={handleReloadActiveFile}
+            title="Reload file"
+            aria-label="Reload file"
+          >
+            <IconRefresh size={13} />
+          </button>
+
+          {/* Split button */}
+          <button
+            type="button"
+            className="breadcrumb-icon-btn"
+            onClick={() => setIsFullscreen((prev) => !prev)}
+            title="Toggle Split Layout"
+            aria-label="Toggle Split Layout"
+          >
+            <IconSplit size={13} />
           </button>
 
           <button

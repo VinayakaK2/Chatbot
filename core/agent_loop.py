@@ -573,10 +573,27 @@ class AgentLoop:
                     arguments=tc.raw_arguments,
                     call_id=tc.id,
                     timeout_seconds=request.tool_timeout_seconds,
-                    context={"task_id": request.task_id, "iteration": iterations},
+                    context={
+                        "task_id": request.task_id,
+                        "iteration": iterations,
+                        "event_sink": lambda event_type, payload: self._emit_event(request, event_type, payload),
+                    },
                 )
 
                 total_tool_calls += 1
+
+                # If permission was denied, emit structured PERMISSION_DENIED event
+                if envelope.error_category == "permission_denied":
+                    self._emit_event(
+                        request,
+                        RuntimeEventType.PERMISSION_DENIED,
+                        {
+                            "call_id": tc.id,
+                            "tool_name": tc.name,
+                            "error": envelope.error,
+                            "reason": envelope.error,
+                        },
+                    )
 
                 # Emit specific completion or failure event (with sanitized payload for client SSE stream)
                 if envelope.success:
