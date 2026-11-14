@@ -123,7 +123,8 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     if (
       activeTab &&
       (activeTab.type === 'markdown' || activeTab.type === 'code') &&
-      activeTab.content.startsWith('# Loading')
+      activeTab.content.startsWith('# Loading') &&
+      typeof apiClient?.getFileContent === 'function'
     ) {
       setIsLoadingFile(true)
       apiClient
@@ -234,7 +235,9 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     setIsPickerOpen((prev) => !prev)
     if (!isPickerOpen) {
       try {
-        const docs = await apiClient.getAvailableDocuments()
+        const docs = typeof apiClient?.getAvailableDocuments === 'function'
+          ? await apiClient.getAvailableDocuments()
+          : []
         setAvailableDocs(docs)
       } catch {
         setAvailableDocs([

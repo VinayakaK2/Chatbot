@@ -108,7 +108,7 @@ export const App: React.FC = () => {
 
   // Right Preview Targets
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactRecord | null>(null)
-  const [previewDiff, setPreviewDiff] = useState<FileDiff | null>(DEFAULT_PREVIEW_DIFF)
+  const [previewDiff, setPreviewDiff] = useState<FileDiff | null>(null)
   const [previewVerification, setPreviewVerification] = useState<VerificationRecord | null>(null)
   const [previewTerminal, setPreviewTerminal] = useState<{
     command: string
@@ -667,21 +667,6 @@ export const App: React.FC = () => {
           </div>
 
           <div className="header-right">
-            {gitDiffSummary && gitDiffSummary.files_changed_count > 0 && (
-              <button
-                type="button"
-                className="diff-review-chip"
-                onClick={handleOpenDiffReview}
-                title="Inspect repository changes"
-                aria-label="Review changed files"
-              >
-                <span>
-                  {gitDiffSummary.files_changed_count} files changed +{gitDiffSummary.insertions} -{gitDiffSummary.deletions} &rsaquo;
-                </span>
-                <span className="review-pill">Review</span>
-              </button>
-            )}
-
             <button
               type="button"
               className="header-btn"
@@ -694,6 +679,7 @@ export const App: React.FC = () => {
               <kbd className="palette-shortcut">⌘K</kbd>
             </button>
 
+            {/* Three Dots: Workspace Settings / More options */}
             <button
               type="button"
               className="header-icon-action-btn"
@@ -704,14 +690,34 @@ export const App: React.FC = () => {
               <IconMoreVertical size={16} />
             </button>
 
+            {/* Paper Icon right next to 3 dots: opens Diff Review directly */}
             <button
               type="button"
-              className={`header-icon-action-btn ${isPreviewOpen ? 'is-active' : ''}`}
-              onClick={() => setIsPreviewOpen((prev) => !prev)}
-              title="Toggle Files & Diff Viewer (Ctrl+Shift+D)"
-              aria-label="Toggle Files and Diff Viewer"
+              className={`header-icon-action-btn ${isPreviewOpen && previewDiff ? 'is-active' : ''}`}
+              onClick={handleOpenDiffReview}
+              title="Review Git Diff"
+              aria-label="Review Git Diff"
             >
               <IconDocument size={16} />
+            </button>
+
+            {/* Toggle Sidebar Button: opens/closes right panel (matching Image 2) */}
+            <button
+              type="button"
+              className={`header-icon-action-btn ${isPreviewOpen && !previewDiff ? 'is-active' : ''}`}
+              onClick={() => {
+                if (!isPreviewOpen) {
+                  setPreviewDiff(null)
+                  setPreviewArtifact(null)
+                  setIsPreviewOpen(true)
+                } else {
+                  setIsPreviewOpen(false)
+                }
+              }}
+              title="Toggle Side Panel (Files & Terminal)"
+              aria-label="Toggle Side Panel"
+            >
+              <IconSidebar size={16} />
             </button>
           </div>
         </header>
@@ -861,6 +867,7 @@ export const App: React.FC = () => {
             diff={previewDiff}
             verification={previewVerification}
             terminalOutput={previewTerminal}
+            onOpenDiff={handleOpenDiffReview}
           />
         </div>
       </main>

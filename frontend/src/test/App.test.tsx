@@ -32,6 +32,21 @@ vi.mock('../services/api-client', () => ({
     cancelTask: vi.fn().mockResolvedValue({ status: 'cancelled' }),
     approveToolCall: vi.fn().mockResolvedValue({ status: 'approved' }),
     rejectToolCall: vi.fn().mockResolvedValue({ status: 'rejected' }),
+    getFileContent: vi.fn().mockResolvedValue({
+      path: 'core/agent_loop.py',
+      name: 'agent_loop.py',
+      content: 'def main(): pass',
+      language: 'python',
+      is_markdown: false,
+      size_bytes: 16,
+    }),
+    getGitDiff: vi.fn().mockResolvedValue({
+      files_changed_count: 0,
+      insertions: 0,
+      deletions: 0,
+      files: [],
+    }),
+    getAvailableDocuments: vi.fn().mockResolvedValue([]),
   },
 }))
 
