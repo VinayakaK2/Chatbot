@@ -485,3 +485,23 @@ class TestAgentLoopExecution:
         assert res.history[0].content == "You are a strict code review agent."
         assert res.history[1].role == AgentMessageRole.USER
         assert res.history[2].role == AgentMessageRole.ASSISTANT
+
+    async def test_scenario_18_sanitize_greeting_response(
+        self, agent_test_registry: ToolRegistry
+    ) -> None:
+        """Greeting prompts sanitize robotic boot headers into polite human replies."""
+        fake_model = FakeModelProvider()
+        fake_model.queue_text_response(
+            "Session Initialized\nReady to assist. Please provide your repository details."
+        )
+
+        loop = AgentLoop(model_provider=fake_model, registry=agent_test_registry)
+        req = AgentExecutionRequest(
+            task_id="t-18",
+            prompt="hi",
+        )
+        res = await loop.run(req)
+
+        assert res.status == TaskStatus.COMPLETED
+        assert res.final_response == "Hello! How can I help you with your code or project today?"
+        assert res.history[-1].content == "Hello! How can I help you with your code or project today?"

@@ -219,9 +219,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     const trimmed = line.trim()
     if (
       /^(>?\s*Status:\s*(Online|Ready|Idle|Active|Operational|Available).*)$/i.test(trimmed) ||
-      /^(#{1,6}\s+)?(Greetings!?|Ready for Development|System Initialized.*|Capabilities & Operations.*)$/i.test(trimmed) ||
-      /^I am configured and ready to assist.*established protocol.*$/i.test(trimmed) ||
-      /^System initialized and operating according to.*$/i.test(trimmed)
+      /^(#{1,6}\s+)?(Greetings!?|Ready for Development|System Initialized.*|Session Initialized.*|Capabilities & Operations.*)$/i.test(trimmed) ||
+      /^I am configured and ready to assist.*$/i.test(trimmed) ||
+      /^System initialized and operating according to.*$/i.test(trimmed) ||
+      /^Ready to assist\.\s*Please provide your repository details.*$/i.test(trimmed)
     ) {
       continue
     }
@@ -372,7 +373,11 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           <div className="thought-body">{thoughtText}</div>
         </details>
       )}
-      {blocks}
+      {blocks.length === 0 && !isStreaming && content.trim() !== '' ? (
+        <p className="markdown-p">Hello! How can I help you today?</p>
+      ) : (
+        blocks
+      )}
       {isStreaming && <span className="streaming-cursor" aria-hidden="true" />}
     </div>
   )

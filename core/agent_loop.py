@@ -24,6 +24,32 @@ from model.contracts import ModelError, ModelProvider, ModelResponse
 
 logger = logging.getLogger("agent_runtime.core.agent_loop")
 
+
+def sanitize_greeting_response(user_prompt: str, response_text: str) -> str:
+    """Ensure casual user greetings receive clean, polite, and human responses instead of robotic boot headers."""
+    cleaned = response_text.strip()
+    prompt_simple = user_prompt.strip().lower().rstrip("!.,?:; ")
+    is_greeting = prompt_simple in {
+        "hi", "hello", "hey", "hii", "hiii", "helloo", "hey there", "hello there",
+        "greetings", "good morning", "good evening", "good afternoon", "namaste", "hola",
+    }
+
+    robotic_patterns = [
+        "session initialized",
+        "system initialized",
+        "ready for development",
+        "status: online",
+        "capabilities & operations",
+        "ready to assist",
+    ]
+    has_robotic = any(p in cleaned.lower() for p in robotic_patterns)
+
+    if is_greeting and has_robotic:
+        return "Hello! How can I help you with your code or project today?"
+
+    return cleaned
+
+
 DEFAULT_SYSTEM_PROMPT: str = """You are a helpful, conversational, and highly skilled software engineering AI assistant.
 
 COMMUNICATION INSTRUCTIONS:
@@ -350,11 +376,12 @@ class AgentLoop:
                     )
 
                 logger.info("AgentLoop completed successfully on turn %d", iterations)
-                history.append(AgentMessage.create_assistant(content=model_response.text))
+                sanitized_text = sanitize_greeting_response(request.prompt, model_response.text)
+                history.append(AgentMessage.create_assistant(content=sanitized_text))
                 return AgentExecutionResult(
                     task_id=request.task_id,
                     status=TaskStatus.COMPLETED,
-                    final_response=model_response.text,
+                    final_response=sanitized_text,
                     finish_reason=model_response.finish_reason or "stop",
                     iterations=iterations,
                     tool_calls_count=total_tool_calls,
