@@ -3,6 +3,7 @@
 **Audit Date:** 2026-11-14  
 **Runtime Scope:** Single-process local agent runtime, Python 3.14 + FastAPI + React/Vite  
 **Target Phase:** Phase 4 — Workspace and Filesystem Tools  
+**Remediation Commit:** `12de63f13a0d2755b6884436465b2b0a3bd41b7c`  
 **Remediation Status:** Complete & Verified  
 
 ---
