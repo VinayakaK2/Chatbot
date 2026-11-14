@@ -146,7 +146,8 @@ export const App: React.FC = () => {
       demo !== 'working' &&
       demo !== 'conversational' &&
       demo !== 'settings' &&
-      demo !== 'sidebar'
+      demo !== 'sidebar' &&
+      demo !== 'audit'
     )
       return
 
@@ -192,6 +193,43 @@ export const App: React.FC = () => {
 
     if (demo === 'settings') {
       setIsSettingsOpen(true)
+      return
+    }
+
+    if (demo === 'audit') {
+      const convId = 'conv-demo-audit'
+      const auditMessages: Message[] = [
+        {
+          id: 'demo-msg-audit-user',
+          role: 'user',
+          content: 'Perform an independent audit of the repository concurrency architecture and verification test execution.',
+          timestamp: new Date().toISOString(),
+        },
+        {
+          id: 'demo-msg-audit-assistant',
+          role: 'assistant',
+          content:
+            '# Phase 3 Final Acceptance Audit Summary Report\n\n**Audit Status:** `COMPLETE · AUDIT ONLY (No code modified)`  \n**Current Git HEAD SHA:** `454342d95cee21bbd38099f4a67f720029983bfa`  \n**Working-Tree Status:** `Clean (Tracked files 100% clean; audit reports untracked)`  \n**Mandatory Authorities:** `sources/2604.14228v3.pdf`, `docs/phases.md`, `AGENTS.md`  \n**Authoritative Audit Artifact:** [`docs/reports/phase-3-final-acceptance-audit.md`](file:///h:/chatbot/docs/reports/phase-3-final-acceptance-audit.md)  \n\n---\n\n### 1. Final Phase 3 Verdict\n**Verdict:** `READY_FOR_OPERATOR_FREEZE`  \nThe implementation satisfies all mandatory Phase 3 requirements defined in `docs/phases.md` and supported by `sources/2604.14228v3.pdf`. No mandatory requirements fail or remain unverified.\n\n---\n\n### 2. Requirement Traceability Summary\n- **Total Phase 3 Requirements Evaluated:** 12  \n- **PASS:** 12 (100%)  \n- **FAIL:** 0  \n- **BLOCKED:** 0  \n- **DEFERRED:** 0 (Phase 3 core scope)  \n*(Complete requirement-to-code mapping detailed in Section 2 of the audit report).*  \n\n---\n\n### 3. Defect F-02 Status\n**Status:** `CLOSED AND VERIFIED`  \n- **Lock-Order Hierarchy:** In `core/task_service.py`, `cleanup_task()` releases `_registry_lock` prior to acquiring the per-task `RLock` (Level 1). Circular deadlocks and global head-of-line blocking are eliminated.\n- **Event Queue Thread Safety:** `EventSubscriber(queue, loop)` cleanly encapsulates subscriber event loops. Cross-thread dispatch is routed safely via `sub.loop.call_soon_threadsafe()`. Undocumented private `_loop` attributes are removed. Closed loops are caught and pruned safely.\n- **Cancellation Token Cross-Thread Signaling:** `token.set()` is scheduled via `task_loop.call_soon_threadsafe(token.set)` when invoked from outside the execution loop.\n- **Ghost Lock Pruning:** `_get_task_lock(task_id, create=False)` prevents phantom lock allocation on reads and cleanup races.\n- **Terminal Immutability:** Linearizable first-to-commit policy is strictly enforced; terminal states (`COMPLETED`, `CANCELLED`, `FAILED`, `LIMIT_REACHED`) are immutable.\n- **Deterministic Test Proof:** All 38 concurrency tests in `tests/test_task_concurrency.py` passed in 0.68s.\n\n---\n\n### 4. Test Execution Summary\n\n| Test Suite | Command | Tests Collected | Passed | Failed | Duration | Exit Code |\n|:---|:---|:---:|:---:|:---:|:---:|:---:|\n| **Task Concurrency Suite** | `.venv\\Scripts\\python.exe -m pytest tests/test_task_concurrency.py -v` | 38 | 38 | 0 | 0.68s | `0` |\n| **Agent Loop Suite** | `.venv\\Scripts\\python.exe -m pytest tests/test_agent_loop.py -v` | 17 | 17 | 0 | 0.50s | `0` |\n| **Tool Dispatcher Suite** | `.venv\\Scripts\\python.exe -m pytest tests/test_tool_dispatcher.py -v` | 14 | 14 | 0 | 0.33s | `0` |\n| **Full Offline Backend Suite** | `.venv\\Scripts\\python.exe -m pytest --ignore=tests/test_smoke_live.py -v` | 275 | 275 | 0 | 4.91s | `0` |\n| **Frontend Component Suite** | `npm --prefix frontend test -- --run` | 37 (8 files) | 37 | 0 | 2.65s | `0` |\n\n---\n\n### 5. Findings Classification\n- **CRITICAL:** 0\n- **HIGH:** 0\n- **MEDIUM:** 0\n- **LOW:** 1\n  - **OBS-01:** `cancel_task()` in `core/task_service.py:499` passes `create=True` to `_get_task_lock()`.\n- **INFO:** 1\n  - **OBS-02:** `record_approval_decision()` updates `self._approvals` without holding `task_lock`.\n\n---\n\n### 6. Eligibility for Freeze\nPhase 3 is **ELIGIBLE FOR OPERATOR FREEZE**. All exit criteria are satisfied, automated tests are green, boundaries are preserved, and documentation is complete.\n\n---\n\n*Phase 4 execution has NOT been started. Execution has stopped to wait for explicit operator authorization.*',
+          timestamp: new Date().toISOString(),
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          status: 'completed',
+          tool_activities: [],
+        },
+      ]
+      setConversations([
+        {
+          id: convId,
+          title: 'Phase 3 Final Acceptance Audit Summary Report',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          project_id: 'proj-default',
+          pinned: true,
+          archived: false,
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          messages: auditMessages,
+        },
+      ])
+      selectConversation(convId)
       return
     }
 
@@ -276,7 +314,8 @@ export const App: React.FC = () => {
         {
           id: 'demo-msg-2',
           role: 'assistant',
-          content: '### Investigation & Verification Summary\n\nI have inspected the repository status and executed the full backend test suite.\n\n```python\n# core/task_service.py\ndef record_approval_decision(self, task_id: str, call_id: str, decision: str) -> bool:\n    \"\"\"Records operator authorization decision in the authoritative task ledger.\"\"\"\n    return True\n```\n\nAll test suites passed cleanly with 100% assertion success.',
+          content:
+            '# Repository Architecture & Test Verification Report\n\n**Status:** `COMPLETED`  \n**Target:** `core/task_service.py` & `api/routes/tasks.py`  \n**Test Suite:** `tests/test_task_concurrency.py`  \n\n---\n\n### 1. Investigation Summary\nInspected repository working-tree, verified lock-order hierarchy, and executed the full test suite without regressions.\n\n---\n\n### 2. File & Component Review\n- **Lock-Order Hierarchy:** In `core/task_service.py`, `cleanup_task()` releases `_registry_lock` prior to acquiring per-task lock.\n- **Thread Safety:** In `api/routes/tasks.py`, event streams and SSE subscribers are managed with safe event loop callbacks.\n\n---\n\n### 3. Test Execution Summary\n\n| Test Suite | Command | Tests Collected | Passed | Failed | Duration | Exit Code |\n|:---|:---|:---:|:---:|:---:|:---:|:---:|\n| **Task Concurrency Suite** | `pytest tests/test_task_concurrency.py` | 38 | 38 | 0 | 0.68s | `0` |\n| **Full Offline Backend Suite** | `pytest tests/` | 275 | 275 | 0 | 5.20s | `0` |\n| **Frontend Component Suite** | `npm test` | 37 | 37 | 0 | 2.80s | `0` |\n\n---\n\n### 4. Verdict\n**Verdict:** `ALL_TESTS_PASSING`  \nAll 275 backend tests and 37 frontend tests pass cleanly with 100% assertion success.',
           timestamp: new Date().toISOString(),
           model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
           status: 'completed',

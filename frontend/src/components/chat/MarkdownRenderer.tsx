@@ -114,7 +114,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   let inList = false
   let listType: 'ul' | 'ol' = 'ul'
-  let listItems: string[] = []
+  let listItems: { text: string; indent: number }[] = []
 
   const flushList = (key: string) => {
     if (!inList) return
@@ -122,8 +122,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       blocks.push(
         <ul key={key} className="markdown-ul">
           {listItems.map((item, idx) => (
-            <li key={idx} className="markdown-li">
-              {renderInlineFormatting(item)}
+            <li
+              key={idx}
+              className={`markdown-li ${item.indent > 0 ? 'markdown-li-nested' : ''}`}
+              style={item.indent > 0 ? { paddingLeft: `${Math.min(item.indent * 16, 48)}px` } : undefined}
+            >
+              {renderInlineFormatting(item.text)}
             </li>
           ))}
         </ul>
@@ -132,8 +136,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       blocks.push(
         <ol key={key} className="markdown-ol">
           {listItems.map((item, idx) => (
-            <li key={idx} className="markdown-li">
-              {renderInlineFormatting(item)}
+            <li
+              key={idx}
+              className={`markdown-li ${item.indent > 0 ? 'markdown-li-nested' : ''}`}
+              style={item.indent > 0 ? { paddingLeft: `${Math.min(item.indent * 16, 48)}px` } : undefined}
+            >
+              {renderInlineFormatting(item.text)}
             </li>
           ))}
         </ol>
@@ -250,7 +258,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         inList = true
         listType = 'ul'
       }
-      listItems.push(ulMatch[2])
+      const indentLevel = Math.floor(ulMatch[1].length / 2)
+      listItems.push({ text: ulMatch[2], indent: indentLevel })
       continue
     }
 
@@ -262,7 +271,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         inList = true
         listType = 'ol'
       }
-      listItems.push(olMatch[2])
+      const indentLevel = Math.floor(olMatch[1].length / 2)
+      listItems.push({ text: olMatch[2], indent: indentLevel })
       continue
     }
 
