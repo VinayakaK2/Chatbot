@@ -11,11 +11,18 @@ class RuntimeEventType(str, Enum):
 
     TASK_CREATED = "task_created"
     MODEL_REQUEST_STARTED = "model_request_started"
+    MODEL_RESPONSE_RECEIVED = "model_response_received"
     TOOL_REQUESTED = "tool_requested"
+    TOOL_VALIDATED = "tool_validated"
+    TOOL_REJECTED = "tool_rejected"
     PERMISSION_DENIED = "permission_denied"
     APPROVAL_NEEDED = "approval_needed"
+    TOOL_EXECUTION_STARTED = "tool_execution_started"
     TOOL_COMPLETED = "tool_completed"
+    TOOL_EXECUTION_FAILED = "tool_execution_failed"
     VERIFICATION_COMPLETED = "verification_completed"
+    TASK_CANCELLED = "task_cancelled"
+    TASK_LIMIT_REACHED = "task_limit_reached"
     TASK_TERMINAL = "task_terminal"
 
 

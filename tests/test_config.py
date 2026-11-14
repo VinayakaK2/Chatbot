@@ -20,7 +20,7 @@ class TestConfiguration:
 
     def test_default_configuration_loads_safely(self) -> None:
         """Ensure settings load with secure default values when no environment is set."""
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.host == "127.0.0.1"
         assert settings.port == 8000
         assert settings.environment == "development"
@@ -80,6 +80,59 @@ class TestConfiguration:
             Settings()
         assert "Timeout must be between 0.1 and 600.0 seconds" in str(exc_info.value)
 
+    def test_valid_http_and_https_base_urls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure both HTTP (e.g. local loopback) and HTTPS (e.g. secure tunnel) URLs are accepted."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", "http://127.0.0.1:8000/v1")
+        s1 = Settings()
+        assert s1.agent_model_base_url == "http://127.0.0.1:8000/v1"
+
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://api.model-server.io/v1")
+        s2 = Settings()
+        assert s2.agent_model_base_url == "https://api.model-server.io/v1"
+
+    def test_url_with_fragment_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reject URLs containing URL fragments to enforce clean API endpoint configuration."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://vllm.tunnel.com/v1#internal_anchor")
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "AGENT_MODEL_BASE_URL must not contain URL fragments" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "unusual_url",
+        [
+            "http://user%3Apass@host.internal:8000/v1",
+            "http://user@host.internal:8000/v1",
+            "http://:password@host.internal:8000/v1",
+            "https://admin%40domain:token@remote.internal/v1",
+        ],
+    )
+    def test_url_with_encoded_or_unusual_credentials_rejected(
+        self, unusual_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reject URLs containing encoded or unusual credential structures in the authority."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", unusual_url)
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+        assert "embedded user credentials" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "malformed_url",
+        [
+            "not_a_valid_url_at_all",
+            "http://",
+            "http:///no-hostname-path",
+            "https://",
+            "http://   ",
+        ],
+    )
+    def test_malformed_urls_missing_hostname_rejected(
+        self, malformed_url: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reject malformed URL strings lacking a valid scheme or hostname."""
+        monkeypatch.setenv("AGENT_MODEL_BASE_URL", malformed_url)
+        with pytest.raises(ValidationError):
+            Settings()
+
     def test_sanitized_diagnostics_redacts_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify that diagnostics dict never exposes raw secret values."""
         raw_secret = "sk-super-secret-production-token-999"
@@ -90,3 +143,11 @@ class TestConfiguration:
         assert raw_secret not in str(diag)
         assert diag["agent_model_api_key_set"] is True
         assert "agent_model_api_key" not in diag
+
+    def test_sanitized_diagnostics_handles_corrupt_url_safely(self) -> None:
+        """Verify get_sanitized_diagnostics returns [INVALID_URL] if an invalid URL bypassed validation."""
+        s = Settings()
+        # Direct attribute assignment simulating corrupt state without re-validation
+        object.__setattr__(s, "agent_model_base_url", "not_a_valid_url")
+        diag = s.get_sanitized_diagnostics()
+        assert diag["agent_model_base_url"] == "[INVALID_URL]"

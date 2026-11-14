@@ -14,17 +14,22 @@ logger = logging.getLogger("agent_runtime.api.health")
 
 
 def sanitize_endpoint_url(url: Optional[str]) -> Optional[str]:
-    """Sanitize URL by stripping any embedded userinfo, credentials, query parameters, or fragments."""
+    """Sanitize URL by stripping any embedded userinfo, credentials, query parameters, or fragments.
+
+    Returns '[INVALID_URL]' if the URL scheme is missing, unsupported, or has no valid hostname,
+    preventing silent transformation of malformed input into apparently valid diagnostics.
+    """
     if not url:
         return None
     try:
         parts = urlsplit(url)
-        host = parts.hostname or ""
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return "[INVALID_URL]"
         port_suffix = f":{parts.port}" if parts.port and parts.port not in (80, 443) else ""
         path = parts.path.rstrip("/")
-        return f"{parts.scheme}://{host}{port_suffix}{path}"
+        return f"{parts.scheme}://{parts.hostname}{port_suffix}{path}"
     except Exception:
-        return "[SANITIZED]"
+        return "[INVALID_URL]"
 
 
 @router.get(
@@ -63,7 +68,9 @@ async def check_readiness(settings: Settings = Depends(get_settings)) -> ModelRe
     sanitized_url = sanitize_endpoint_url(endpoint)
     probe_url = f"{endpoint}/models"
 
-    headers = {}
+    headers = {
+        "ngrok-skip-browser-warning": "true",
+    }
     if settings.agent_model_api_key:
         headers["Authorization"] = f"Bearer {settings.agent_model_api_key.get_secret_value()}"
 

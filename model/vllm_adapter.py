@@ -16,7 +16,6 @@ from model.contracts import (
     ModelResponseError,
     ModelTimeoutError,
 )
-
 logger = logging.getLogger("agent_runtime.model.vllm_adapter")
 
 
@@ -52,6 +51,7 @@ class VLLMAdapter(ModelProvider):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "ngrok-skip-browser-warning": "true",
         }
         if self._api_key_str:
             headers["Authorization"] = f"Bearer {self._api_key_str}"
@@ -100,6 +100,21 @@ class VLLMAdapter(ModelProvider):
             "max_tokens": max_tokens or 2048,
             "temperature": temperature if temperature is not None else 0.2,
         }
+
+        # Multi-turn conversation messages support for Phase 3
+        if "messages" in kwargs and kwargs["messages"]:
+            raw_messages = kwargs["messages"]
+            formatted_messages = []
+            for m in raw_messages:
+                if hasattr(m, "to_openai_dict"):
+                    formatted_messages.append(m.to_openai_dict())
+                elif isinstance(m, dict):
+                    formatted_messages.append(m)
+                elif hasattr(m, "model_dump"):
+                    formatted_messages.append(m.model_dump(exclude_none=True))
+                else:
+                    formatted_messages.append(dict(m))
+            payload["messages"] = formatted_messages
 
         # Include optional tool definitions if provided for future phases
         if "tools" in kwargs and kwargs["tools"]:

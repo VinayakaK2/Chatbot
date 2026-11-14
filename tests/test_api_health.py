@@ -172,3 +172,50 @@ class TestHealthEndpoints:
         data = response.json()
         assert data["status"] == "unreachable"
         assert "connection refused" in data["message"].lower()
+
+
+class TestSanitizeEndpointUrl:
+    """Ensure endpoint sanitization function strictly handles edge cases and never leaks credentials."""
+
+    def test_sanitize_valid_urls(self) -> None:
+        """Verify standard HTTP and HTTPS endpoints retain valid path and port."""
+        from api.routes.health import sanitize_endpoint_url
+
+        assert sanitize_endpoint_url("http://127.0.0.1:8000/v1") == "http://127.0.0.1:8000/v1"
+        assert sanitize_endpoint_url("https://vllm.tunnel.io/v1/") == "https://vllm.tunnel.io/v1"
+        assert sanitize_endpoint_url("https://vllm.internal:9000/api") == "https://vllm.internal:9000/api"
+
+    def test_sanitize_strips_credentials_queries_and_fragments(self) -> None:
+        """Verify user credentials, queries, and fragments are stripped cleanly."""
+        from api.routes.health import sanitize_endpoint_url
+
+        dirty_url = "https://admin:supersecret@tunnel.ngrok.app:8443/v1?token=xyz123#anchor"
+        sanitized = sanitize_endpoint_url(dirty_url)
+        assert sanitized == "https://tunnel.ngrok.app:8443/v1"
+        assert "admin" not in sanitized
+        assert "supersecret" not in sanitized
+        assert "xyz123" not in sanitized
+        assert "anchor" not in sanitized
+
+    @pytest.mark.parametrize(
+        "malformed_url",
+        [
+            "not_a_valid_url",
+            "ftp://files.internal/v1",
+            "http://",
+            "http:///no-host",
+            "://corrupt",
+        ],
+    )
+    def test_sanitize_malformed_urls_returns_invalid_marker(self, malformed_url: str) -> None:
+        """Verify malformed or unsupported URLs return [INVALID_URL] instead of pseudo-valid URLs."""
+        from api.routes.health import sanitize_endpoint_url
+
+        assert sanitize_endpoint_url(malformed_url) == "[INVALID_URL]"
+
+    def test_sanitize_none_and_empty(self) -> None:
+        """Verify None or empty strings return None."""
+        from api.routes.health import sanitize_endpoint_url
+
+        assert sanitize_endpoint_url(None) is None
+        assert sanitize_endpoint_url("") is None

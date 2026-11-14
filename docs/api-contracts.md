@@ -47,6 +47,12 @@ Probes the upstream model server (`GET /models`) using a non-generating 5.0-seco
 - `unreachable`: TCP connection failed, DNS failed, or probe timed out.
 - `error`: Unexpected upstream failure.
 
+**Security & Sanitization Policy:**
+- The `endpoint` attribute returned by `/api/readiness` is sanitized via `sanitize_endpoint_url()`.
+- Embedded credentials (userinfo), query parameters, and URL fragments are stripped.
+- If the endpoint string is malformed, lacks an `http://` or `https://` scheme, or has no valid hostname, `[INVALID_URL]` is returned rather than a pseudo-URL.
+- URL fragments (`#...`) are strictly prohibited in `AGENT_MODEL_BASE_URL` and rejected during startup validation.
+
 ---
 
 ## 2. Task Management

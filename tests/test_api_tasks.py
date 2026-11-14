@@ -58,7 +58,9 @@ class TestTaskEndpoints:
 
     async def test_unconfigured_model_task_submission(self) -> None:
         """Verify task submission safely fails with clear message when model is unconfigured."""
-        app = create_app(Settings())
+        settings = Settings(agent_model_base_url=None)
+        set_task_service(TaskService(settings))
+        app = create_app(settings)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
@@ -217,3 +219,65 @@ class TestTaskEndpoints:
         assert response.status_code == 404
         data = response.json()
         assert "not found" in data["detail"].lower()
+
+    async def test_task_events_history_retrieval(self) -> None:
+        """Verify task lifecycle events are recorded and retrievable."""
+        mock_provider = MockModelProvider(response_text="Event test answer.")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create_resp = await client.post("/api/tasks", json={"prompt": "Emit events test"})
+            assert create_resp.status_code == 201
+            task_id = create_resp.json()["task_id"]
+
+            events_resp = await client.get(f"/api/tasks/{task_id}/events/history")
+            assert events_resp.status_code == 200
+            events = events_resp.json()
+            assert len(events) >= 2
+            event_types = [e["event_type"] for e in events]
+            assert "task_created" in event_types
+            assert "task_terminal" in event_types
+
+    async def test_task_cancel(self) -> None:
+        """Verify cancellation endpoint cancels a task."""
+        mock_provider = MockModelProvider(response_text="Finished")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create_resp = await client.post("/api/tasks", json={"prompt": "Task to cancel"})
+            task_id = create_resp.json()["task_id"]
+
+            cancel_resp = await client.post(f"/api/tasks/{task_id}/cancel")
+            assert cancel_resp.status_code == 200
+
+    async def test_task_tool_approval_and_rejection(self) -> None:
+        """Verify tool approval and rejection recording."""
+        mock_provider = MockModelProvider(response_text="Done")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create_resp = await client.post("/api/tasks", json={"prompt": "Approval test"})
+            task_id = create_resp.json()["task_id"]
+
+            appr_resp = await client.post(
+                f"/api/tasks/{task_id}/approve",
+                json={"call_id": "call-123", "reason": "Authorized by user"},
+            )
+            assert appr_resp.status_code == 200
+            assert appr_resp.json()["status"] == "approved"
+
+            rej_resp = await client.post(
+                f"/api/tasks/{task_id}/reject",
+                json={"call_id": "call-456", "reason": "Too risky"},
+            )
+            assert rej_resp.status_code == 200
+            assert rej_resp.json()["status"] == "rejected"

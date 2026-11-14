@@ -13,6 +13,8 @@ class TaskStatus(str, Enum):
     EXECUTING = "executing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    LIMIT_REACHED = "limit_reached"
 
 
 class TaskCreateRequest(BaseModel):
@@ -72,6 +74,18 @@ class TaskResponse(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Actionable error description if execution failed",
+    )
+    iterations: Optional[int] = Field(
+        default=None,
+        description="Total multi-turn iteration cycles executed",
+    )
+    tool_calls_count: Optional[int] = Field(
+        default=None,
+        description="Total tool calls executed during the task",
+    )
+    termination_reason: Optional[str] = Field(
+        default=None,
+        description="Explicit terminal condition reason (e.g., 'completed', 'cancelled', 'max_iterations')",
     )
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),

@@ -68,6 +68,26 @@ class Settings(BaseSettings):
         default=DEFAULT_MAX_PROMPT_LENGTH,
         description="Maximum accepted character count for user prompts",
     )
+    agent_max_iterations: int = Field(
+        default=20,
+        validation_alias="AGENT_MAX_ITERATIONS",
+        description="Upper bound on multi-turn model interaction cycles per task",
+    )
+    agent_max_tool_calls: int = Field(
+        default=50,
+        validation_alias="AGENT_MAX_TOOL_CALLS",
+        description="Upper bound on total tool invocations per task",
+    )
+    agent_tool_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias="AGENT_TOOL_TIMEOUT_SECONDS",
+        description="Execution timeout in seconds for individual tool calls",
+    )
+    agent_task_timeout_seconds: float = Field(
+        default=300.0,
+        validation_alias="AGENT_TASK_TIMEOUT_SECONDS",
+        description="Overall wall-clock timeout in seconds for agent task completion",
+    )
 
     @field_validator("port")
     @classmethod
@@ -90,10 +110,14 @@ class Settings(BaseSettings):
             raise ValueError(f"AGENT_MODEL_BASE_URL must start with http:// or https://, got: {stripped}")
         from urllib.parse import urlsplit
         parts = urlsplit(stripped)
-        if parts.username or parts.password:
+        if not parts.hostname:
+            raise ValueError(f"AGENT_MODEL_BASE_URL must contain a valid hostname, got: {stripped}")
+        if "@" in parts.netloc or parts.username or parts.password:
             raise ValueError("AGENT_MODEL_BASE_URL must not contain embedded user credentials. Use AGENT_MODEL_API_KEY instead.")
         if parts.query:
             raise ValueError("AGENT_MODEL_BASE_URL must not contain query parameters.")
+        if parts.fragment:
+            raise ValueError("AGENT_MODEL_BASE_URL must not contain URL fragments.")
         return stripped.rstrip("/")
 
     @field_validator("agent_model_timeout_seconds")
@@ -112,6 +136,38 @@ class Settings(BaseSettings):
             raise ValueError(f"Max retries must be between 0 and 10, got {v}")
         return v
 
+    @field_validator("agent_max_iterations")
+    @classmethod
+    def validate_max_iterations(cls, v: int) -> int:
+        """Ensure max iterations is positive and bounded."""
+        if not (1 <= v <= 100):
+            raise ValueError(f"AGENT_MAX_ITERATIONS must be between 1 and 100, got {v}")
+        return v
+
+    @field_validator("agent_max_tool_calls")
+    @classmethod
+    def validate_max_tool_calls(cls, v: int) -> int:
+        """Ensure max tool calls is positive and bounded."""
+        if not (1 <= v <= 200):
+            raise ValueError(f"AGENT_MAX_TOOL_CALLS must be between 1 and 200, got {v}")
+        return v
+
+    @field_validator("agent_tool_timeout_seconds")
+    @classmethod
+    def validate_tool_timeout(cls, v: float) -> float:
+        """Ensure tool timeout is bounded."""
+        if v <= 0.0 or v > 300.0:
+            raise ValueError(f"AGENT_TOOL_TIMEOUT_SECONDS must be between 0.1 and 300.0, got {v}")
+        return v
+
+    @field_validator("agent_task_timeout_seconds")
+    @classmethod
+    def validate_task_timeout(cls, v: float) -> float:
+        """Ensure task timeout is bounded."""
+        if v <= 0.0 or v > 1800.0:
+            raise ValueError(f"AGENT_TASK_TIMEOUT_SECONDS must be between 0.1 and 1800.0, got {v}")
+        return v
+
     @property
     def is_model_configured(self) -> bool:
         """Check whether the model provider configuration has required minimal endpoint coordinates."""
@@ -123,9 +179,11 @@ class Settings(BaseSettings):
         if self.agent_model_base_url:
             from urllib.parse import urlsplit
             p = urlsplit(self.agent_model_base_url)
-            host = p.hostname or ""
-            port_suffix = f":{p.port}" if p.port and p.port not in (80, 443) else ""
-            clean_url = f"{p.scheme}://{host}{port_suffix}{p.path.rstrip('/')}"
+            if p.scheme in ("http", "https") and p.hostname:
+                port_suffix = f":{p.port}" if p.port and p.port not in (80, 443) else ""
+                clean_url = f"{p.scheme}://{p.hostname}{port_suffix}{p.path.rstrip('/')}"
+            else:
+                clean_url = "[INVALID_URL]"
 
         return {
             "host": self.host,
@@ -140,6 +198,10 @@ class Settings(BaseSettings):
             "agent_model_timeout_seconds": self.agent_model_timeout_seconds,
             "agent_model_max_retries": self.agent_model_max_retries,
             "max_prompt_length": self.max_prompt_length,
+            "agent_max_iterations": self.agent_max_iterations,
+            "agent_max_tool_calls": self.agent_max_tool_calls,
+            "agent_tool_timeout_seconds": self.agent_tool_timeout_seconds,
+            "agent_task_timeout_seconds": self.agent_task_timeout_seconds,
         }
 
 

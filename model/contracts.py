@@ -51,9 +51,13 @@ class ModelMessage(BaseModel):
     """Standard message representation for chat completions."""
 
     role: str = Field(..., description="Message author role: system, user, assistant, or tool")
-    content: str = Field(..., description="Text content of the message")
+    content: Optional[str] = Field(default="", description="Text content of the message")
     name: Optional[str] = Field(default=None, description="Optional author or tool name")
     tool_call_id: Optional[str] = Field(default=None, description="Matching tool call ID if role is tool")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Structured tool calls emitted by assistant",
+    )
 
 
 class ModelRequest(BaseModel):
