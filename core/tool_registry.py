@@ -150,6 +150,10 @@ class ToolRegistry:
         """Support standard 'in' membership testing."""
         return self.has(name)
 
+    def __bool__(self) -> bool:
+        """A ToolRegistry instance is always considered truthy regardless of registered tool count."""
+        return True
+
 
 # ==============================================================================
 # Global Registry Singleton & Factory

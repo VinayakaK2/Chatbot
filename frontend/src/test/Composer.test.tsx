@@ -17,7 +17,7 @@ describe('Composer Component', () => {
     expect(onSendMessage).toHaveBeenCalledWith(
       'Fix failing unit tests in core/',
       [],
-      'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+      'antigravity/gemini-3.8-flash',
       'high'
     )
   })

@@ -133,7 +133,7 @@ Runtime Orchestrator  <---- task lifecycle, budgets, cancellation, terminal stat
 | 1 | Model adapter and task API | API can reach vLLM and expose a safe model-connectivity/task status contract | 0 | Complete (`8f589f7`) |
 | 2 | Typed tool contracts and registry | Tools can be registered, described, validated, and looked up | 0 | FROZEN (`34ede8b`) |
 | 3 | Agent execution loop and live events | Model ↔ tool ↔ result cycle, streamed to GUI with bounded stopping behavior | 1, 2 | **FROZEN** (Operator Approved: 2026-11-14, SHA: `454342d95cee21bbd38099f4a67f720029983bfa`) |
-| 4 | Workspace and filesystem tools | Safe project exploration and controlled file changes | 2, 3 | Ready for Implementation (Awaiting Operator Start) |
+| 4 | Workspace and filesystem tools | Safe project exploration and controlled file changes | 2, 3 | Complete — Ready for Operator Freeze |
 | 5 | Shell, approvals, and permissions | Explicit policy enforcement and bounded command execution | 2, 3, 4 | Planned |
 | 6 | Context management | Bounded, relevant context without destroying source history | 3 | Planned |
 | 7 | Persistent state and session recovery | SQLite-backed sessions/tasks/tool records and safe resume | 3, 6 | Planned |

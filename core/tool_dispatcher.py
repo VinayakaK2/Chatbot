@@ -46,10 +46,11 @@ class DefaultPermissionPolicy:
         denied_tool_names: Optional[Set[str]] = None,
     ) -> None:
         """Initialize permission policy with explicit category and tool name boundaries."""
-        # By default in Phase 3, allow READ_ONLY and SYSTEM_PROBE (safe diagnostic/test tools)
+        # By default in Phase 4, allow READ_ONLY, SYSTEM_PROBE, and WORKSPACE_WRITE
         self.allowed_categories = allowed_categories or {
             ToolRiskCategory.READ_ONLY,
             ToolRiskCategory.SYSTEM_PROBE,
+            ToolRiskCategory.WORKSPACE_WRITE,
         }
         self.allowed_tool_names = allowed_tool_names or set()
         self.denied_tool_names = denied_tool_names or set()

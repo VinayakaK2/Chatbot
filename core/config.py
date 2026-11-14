@@ -89,6 +89,43 @@ class Settings(BaseSettings):
         description="Overall wall-clock timeout in seconds for agent task completion",
     )
 
+    # Workspace and Filesystem Bounds (Phase 4)
+    workspace_root: Optional[str] = Field(
+        default=None,
+        validation_alias="WORKSPACE_ROOT",
+        description="Explicit configured root directory for workspace filesystem operations",
+    )
+    max_file_size_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        validation_alias="MAX_FILE_SIZE_BYTES",
+        description="Maximum file size in bytes for filesystem operations (10MB)",
+    )
+    max_read_bytes: int = Field(
+        default=256 * 1024,
+        validation_alias="MAX_READ_BYTES",
+        description="Maximum read bytes per operation (256KB)",
+    )
+    max_directory_entries: int = Field(
+        default=1000,
+        validation_alias="MAX_DIRECTORY_ENTRIES",
+        description="Maximum directory entries returned in list operations",
+    )
+    max_search_results: int = Field(
+        default=200,
+        validation_alias="MAX_SEARCH_RESULTS",
+        description="Maximum matching results returned in search operations",
+    )
+    max_write_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        validation_alias="MAX_WRITE_BYTES",
+        description="Maximum file write payload in bytes (5MB)",
+    )
+    max_edit_bytes: int = Field(
+        default=1024 * 1024,
+        validation_alias="MAX_EDIT_BYTES",
+        description="Maximum file edit payload in bytes (1MB)",
+    )
+
     @field_validator("port")
     @classmethod
     def validate_port_range(cls, v: int) -> int:
@@ -202,6 +239,7 @@ class Settings(BaseSettings):
             "agent_max_tool_calls": self.agent_max_tool_calls,
             "agent_tool_timeout_seconds": self.agent_tool_timeout_seconds,
             "agent_task_timeout_seconds": self.agent_task_timeout_seconds,
+            "workspace_root": self.workspace_root,
         }
 
 

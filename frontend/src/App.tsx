@@ -451,7 +451,12 @@ export const App: React.FC = () => {
       if (attachments && attachments.length > 0) {
         const attachedContents = attachments
           .filter((att) => att.content)
-          .map((att) => `\`\`\`${att.name}\n// Attached File: ${att.name} (${Math.round(att.size / 1024)} KB)\n${att.content}\n\`\`\``)
+          .map((att) => {
+            if (att.type.startsWith('image/')) {
+              return `![${att.name}](${att.content})\n*(Image: ${att.name})*`
+            }
+            return `\`\`\`${att.name}\n// Attached File: ${att.name} (${Math.round(att.size / 1024)} KB)\n${att.content}\n\`\`\``
+          })
           .join('\n\n')
 
         if (attachedContents) {

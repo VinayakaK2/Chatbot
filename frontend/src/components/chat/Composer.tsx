@@ -29,10 +29,11 @@ export interface ComposerProps {
 }
 
 const AVAILABLE_MODELS = [
-  { id: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ', label: 'Qwen 2.5 Coder 14B (vLLM)', description: 'Local / Colab vLLM Backend (Recommended)' },
-  { id: 'antigravity/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High)', description: 'Fast multimodal reasoning' },
-  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: 'Advanced code intelligence' },
-  { id: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI multi-domain model' },
+  { id: 'antigravity/gemini-3.8-flash', label: 'Gemini 3.8 Flash (Multimodal)', description: 'Fast multimodal vision & coding model (Configured)' },
+  { id: 'antigravity/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High Reasoning)', description: 'Deep reasoning multimodal model' },
+  { id: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ', label: 'Qwen 2.5 Coder 14B', description: 'Local / Colab vLLM Backend' },
+  { id: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI multimodal model' },
+  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: 'Anthropic multimodal model' },
 ]
 
 const REASONING_LEVELS = [
@@ -46,7 +47,7 @@ export const Composer: React.FC<ComposerProps> = ({
   onStopGeneration,
   isGenerating = false,
   disabled = false,
-  selectedModel = 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+  selectedModel = 'antigravity/gemini-3.8-flash',
   onSelectModel,
   placeholder,
   initialText,
@@ -98,7 +99,7 @@ export const Composer: React.FC<ComposerProps> = ({
     }
   }
 
-  // File Attachment handling — reads file text into attachment content
+  // File Attachment handling — reads file text or image base64 data URL into attachment content
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
@@ -110,9 +111,19 @@ export const Composer: React.FC<ComposerProps> = ({
         const isImage = file.type.startsWith('image/')
 
         if (isImage) {
-          content = `[Image Attached: ${file.name} (${Math.round(file.size / 1024)} KB) — Note: Current runtime model (Qwen2.5-Coder) is a pure text/code LLM without vision capability. Visual/image understanding requires a Vision-Language Model like Qwen2-VL or GPT-4o.]`
-        } else if (file.size > 1024 * 1024) {
-          content = `[File ${file.name} is too large (${Math.round(file.size / 1024)} KB > 1MB) to embed directly into prompt context]`
+          try {
+            content = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(reader.result as string)
+              reader.onerror = reject
+              reader.readAsDataURL(file)
+            })
+          } catch (err) {
+            console.warn('Could not read image file as data URL:', err)
+            content = `[Failed to read image ${file.name}]`
+          }
+        } else if (file.size > 2 * 1024 * 1024) {
+          content = `[File ${file.name} is too large (${Math.round(file.size / 1024)} KB > 2MB) to embed directly into prompt context]`
         } else {
           try {
             content = await file.text()

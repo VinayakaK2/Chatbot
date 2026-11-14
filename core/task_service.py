@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import logging
+import os
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 import uuid
@@ -13,8 +14,10 @@ from core.agent_loop import AgentExecutionRequest, AgentLoop, DEFAULT_SYSTEM_PRO
 from core.config import Settings, get_settings
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
+from core.workspace import WorkspaceContext
 from model.contracts import ModelError, ModelProvider
 from model.vllm_adapter import VLLMAdapter
+from tools.registry_setup import register_workspace_tools
 
 logger = logging.getLogger("agent_runtime.core.task_service")
 
@@ -49,6 +52,7 @@ class TaskService:
         tool_registry: Optional[ToolRegistry] = None,
         tool_dispatcher: Optional[ToolDispatcher] = None,
         agent_loop: Optional[AgentLoop] = None,
+        workspace_context: Optional[WorkspaceContext] = None,
     ) -> None:
         """Initialize the task service with model provider, registry, dispatcher, and agent loop."""
         self.settings = settings or get_settings()
@@ -57,6 +61,15 @@ class TaskService:
             registry=self.tool_registry,
             default_timeout_seconds=self.settings.agent_tool_timeout_seconds,
         )
+        self.workspace_context = workspace_context or (
+            WorkspaceContext(self.settings.workspace_root)
+            if self.settings.workspace_root
+            else WorkspaceContext(root_path=os.getcwd())
+        )
+
+        # Register standard Phase 4 workspace tools into registry if not present
+        if not self.tool_registry.has("read_file"):
+            register_workspace_tools(registry=self.tool_registry, workspace=self.workspace_context)
 
         if model_provider is not None:
             self.model_provider: Optional[ModelProvider] = model_provider

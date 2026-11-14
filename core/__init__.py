@@ -33,6 +33,18 @@ from core.tool_registry import (
     get_global_registry,
     reset_global_registry,
 )
+from core.workspace import (
+    BinaryFileError,
+    EditConflictError,
+    FileTooLargeError,
+    InvalidPathError,
+    PathOutsideWorkspaceError,
+    WorkspaceContext,
+    WorkspaceDirectoryNotFoundError,
+    WorkspaceError,
+    WorkspaceFileNotFoundError,
+    WorkspaceIOError,
+)
 
 __all__ = [
     "AgentExecutionRequest",
@@ -40,10 +52,15 @@ __all__ = [
     "AgentLoop",
     "AgentMessage",
     "AgentMessageRole",
+    "BinaryFileError",
     "DefaultPermissionPolicy",
     "DuplicateToolError",
+    "EditConflictError",
+    "FileTooLargeError",
+    "InvalidPathError",
     "InvalidToolNameError",
     "InvalidToolSchemaError",
+    "PathOutsideWorkspaceError",
     "PermissionPolicy",
     "ToolCallRecord",
     "ToolCallStatus",
@@ -56,6 +73,11 @@ __all__ = [
     "ToolRiskCategory",
     "ToolValidationError",
     "ToolRegistry",
+    "WorkspaceContext",
+    "WorkspaceDirectoryNotFoundError",
+    "WorkspaceError",
+    "WorkspaceFileNotFoundError",
+    "WorkspaceIOError",
     "get_global_registry",
     "reset_global_registry",
 ]
