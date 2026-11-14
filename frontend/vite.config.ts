@@ -1,7 +1,8 @@
+/// <reference types="vitest" />
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
-// Configure Vite with local backend API reverse proxy
+// Configure Vite with local backend API reverse proxy and Vitest environment
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -12,5 +13,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

@@ -1,6 +1,6 @@
 /**
- * Centralized HTTP API client for communicating with the backend runtime.
- * Never connects directly to external model servers or exposes credentials.
+ * Centralized HTTP and SSE API Client for communicating with the backend runtime.
+ * Never connects directly to external model servers or executes unauthorized commands.
  */
 
 import type {
@@ -8,10 +8,11 @@ import type {
   ModelReadinessResponse,
   TaskCreateRequest,
   TaskResponse,
+  RuntimeEvent,
   ApiErrorResponse,
 } from '../types/api'
 
-// Base URL defaults to relative path in dev (handled by Vite proxy) or env override
+// Base URL defaults to relative path in dev (handled by Vite reverse proxy) or env override
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 // Helper to safely parse JSON or return raw text on unexpected formats
@@ -135,6 +136,151 @@ export const apiClient = {
         throw err
       }
       throw new Error(`Failed to retrieve task with ID: ${taskId}`)
+    }
+  },
+
+  /**
+   * Cancel an in-progress or queued task.
+   */
+  async cancelTask(taskId: string): Promise<TaskResponse> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/cancel`, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as TaskResponse
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error(`Failed to cancel task with ID: ${taskId}`)
+    }
+  },
+
+  /**
+   * Retrieve all recorded events for a task.
+   */
+  async getTaskEventHistory(taskId: string): Promise<RuntimeEvent[]> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/events/history`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as RuntimeEvent[]
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error(`Failed to fetch event history for task: ${taskId}`)
+    }
+  },
+
+  /**
+   * Subscribe to live execution events via Server-Sent Events (SSE).
+   * Returns a cleanup unsubscribe callback.
+   */
+  subscribeToTaskEvents(
+    taskId: string,
+    onEvent: (event: RuntimeEvent) => void,
+    onDone?: () => void,
+    onError?: (err: Error) => void,
+  ): () => void {
+    const url = `${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/events`
+    const eventSource = new EventSource(url)
+
+    eventSource.onmessage = (e: MessageEvent) => {
+      try {
+        const parsed = JSON.parse(e.data) as RuntimeEvent
+        onEvent(parsed)
+      } catch (err) {
+        console.error('Failed to parse SSE event data', err)
+      }
+    }
+
+    eventSource.addEventListener('done', () => {
+      eventSource.close()
+      if (onDone) {
+        onDone()
+      }
+    })
+
+    eventSource.onerror = () => {
+      eventSource.close()
+      if (onError) {
+        onError(new Error('SSE stream disconnected or encountered an error.'))
+      }
+    }
+
+    return () => {
+      eventSource.close()
+    }
+  },
+
+  /**
+   * Human decision authority: approve an eligible tool execution.
+   */
+  async approveToolCall(
+    taskId: string,
+    callId: string,
+    reason?: string,
+  ): Promise<{ status: string; task_id: string; call_id: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ call_id: callId, reason }),
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as { status: string; task_id: string; call_id: string }
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Approval request failed.')
+    }
+  },
+
+  /**
+   * Human decision authority: reject an eligible tool execution.
+   */
+  async rejectToolCall(
+    taskId: string,
+    callId: string,
+    reason?: string,
+  ): Promise<{ status: string; task_id: string; call_id: string }> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tasks/${encodeURIComponent(taskId)}/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ call_id: callId, reason }),
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as { status: string; task_id: string; call_id: string }
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Rejection request failed.')
     }
   },
 }

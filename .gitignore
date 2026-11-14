@@ -34,3 +34,7 @@ frontend/dist/
 # Logs
 *.log
 logs/
+
+# Temporary screenshots & visual verification artifacts
+screenshot-*.png
+shot_*.png
