@@ -222,3 +222,7 @@ class MalformedContextItemError(ContextError):
 
 class ContextAssemblyError(ContextError):
     """Raised when deterministic assembly fails due to internal pipeline errors."""
+
+
+class OutputBudgetExceededError(ContextError):
+    """Raised when an output cannot be bounded within the requested token budget."""

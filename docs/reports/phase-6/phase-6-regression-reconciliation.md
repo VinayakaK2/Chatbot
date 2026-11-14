@@ -13,11 +13,11 @@ In the Phase 5 completion reports, the test suite reported:
 - **438 passed, 1 skipped** (439 collected tests).
 
 In Phase 6, the test suite reports:
-- **460 passed, 1 skipped** (461 collected tests).
+- **462 passed, 1 skipped** (463 collected tests).
 
 ### Reconciliation Equation
-$$\text{Phase 6 Collected Tests} = \text{Phase 5 Baseline (439)} + \text{Phase 6 Dedicated Tests (22)} + \text{Phase 6 Config Test (1)} = \mathbf{462}$$
-$$\text{Phase 6 Passed Tests} = \text{Phase 5 Passed (438)} + \text{Phase 6 Dedicated Tests (22)} + \text{Phase 6 Config Test (1)} = \mathbf{461}$$
+$$\text{Phase 6 Collected Tests} = \text{Phase 5 Baseline (439)} + \text{Phase 6 Dedicated Tests (23)} + \text{Phase 6 Config Test (1)} = \mathbf{463}$$
+$$\text{Phase 6 Passed Tests} = \text{Phase 5 Passed (438)} + \text{Phase 6 Dedicated Tests (23)} + \text{Phase 6 Config Test (1)} = \mathbf{462}$$
 $$\text{Phase 6 Skipped Tests} = \text{Phase 5 Skipped (1)} = \mathbf{1}$$
 
 Every single test from Phase 0 through Phase 5 passed without modification or failure.
@@ -39,7 +39,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 | `tests/test_approval.py` | 10 | 10 | 0 | Phase 5 volatile approval manager |
 | `tests/test_config.py` | 20 | **21** | **+1** | Added `test_context_management_settings_default_and_custom` |
 | `tests/test_context_adversarial.py` | 0 | **9** | **+9** | **NEW** Phase 6 adversarial test suite |
-| `tests/test_context_manager.py` | 0 | **13** | **+13** | **NEW** Phase 6 unit test suite (including F6-01 invariant test) |
+| `tests/test_context_manager.py` | 0 | **14** | **+14** | **NEW** Phase 6 unit test suite (including F6-01 & F6-12 invariant tests) |
 | `tests/test_filesystem.py` | 14 | 14 | 0 | Filesystem core operations |
 | `tests/test_filesystem_integration.py` | 14 | 14 | 0 | Workspace filesystem integration |
 | `tests/test_live_server.py` | 1 | 1 | 0 | Live server binding |
@@ -54,7 +54,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 | `tests/test_tool_dispatcher.py` | 14 | 14 | 0 | Tool dispatcher execution |
 | `tests/test_tool_registry.py` | 20 | 20 | 0 | Registry lookup & auto-registration |
 | `tests/test_workspace_security.py` | 24 | 24 | 0 | 23 passed, 1 skipped (Windows symlink) |
-| **TOTALS** | **439** | **462** | **+23** | **461 passed, 1 skipped in 36.51s** |
+| **TOTALS** | **439** | **463** | **+24** | **462 passed, 1 skipped in 15.95s** |
 
 ---
 
@@ -68,11 +68,14 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 5. `test_secret_redaction_across_all_categories`: Verifies redaction of API keys and bearer tokens.
 6. `test_original_transcript_preservation_in_history`: Verifies uncompacted history returned.
 7. `test_chronological_conversation_reordering`: Verifies final wire messages are in chronological order.
-8. `test_summary_provenance_and_is_derived_flag`: Validates `DerivedSummary` fields.
+7. `test_chronological_conversation_reordering`: Verifies final wire messages are in chronological order.
+8. `test_summary_provenance_and_is_derived_flag`: Validates `DerivedSummary` fields and untrusted user role isolation.
 9. `test_budget_exhaustion_drops_lower_priority_items`: Validates budget allocation and exclusion reasons.
 10. `test_empty_and_none_text_handling`: Validates resilience against empty/None inputs.
 11. `test_task_state_and_evidence_formatting`: Validates structured JSON formatting for state/evidence.
 12. `test_context_assembly_diagnostics_structure`: Validates all fields of `ContextAssemblyDiagnostics`.
+13. `test_bounded_output_never_exceeds_max_tokens_budget`: Validates F6-01 & F6-12 mathematical invariant across limits [64, 100, 200, 500, 1000, 2000].
+14. `test_impossibly_small_budget_raises_error`: Validates F6-12 fail-closed `OutputBudgetExceededError` on impossibly small budgets.
 
 ### B. `tests/test_context_adversarial.py` (9 Tests)
 1. `test_huge_tool_output_500k_chars_is_safely_bounded`: Probes extreme 500k-char tool output.
@@ -82,7 +85,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 5. `test_nonzero_exit_code_and_stack_trace_preserved_under_severe_truncation`: Validates tail failure trace retention.
 6. `test_verification_evidence_prioritized_over_generic_stale_history`: Validates Priority 6 > Priority 9.
 7. `test_prompt_injection_in_tool_output_is_quarantined_as_tool_role`: Validates prompt injection containment.
-8. `test_derived_summary_cannot_forge_permission_or_verification`: Validates immunity against forged summaries.
+8. `test_derived_summary_cannot_grant_permissions`: Validates untrusted summary role isolation and immunity against forged permissions.
 9. `test_concurrent_sessions_do_not_cross_contaminate`: Tests 5 simultaneous threads for cross-session leaks.
 
 ### C. `tests/test_config.py` (1 Test Added)
@@ -90,7 +93,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 
 ---
 
-## 4. Frontend Regression Suite
+## 4. Frontend Regression Suite & Discrepancy Reconciliation
 
 `npm --prefix frontend test -- --run`:
 - `src/test/useConversations.test.ts`: 4 passed
@@ -100,11 +103,15 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 - `src/test/MarkdownRenderer.test.tsx`: 11 passed
 - `src/test/FilesystemActivity.test.tsx`: 6 passed
 - `src/test/Composer.test.tsx`: 5 passed
-- `src/test/FileViewerPanel.test.tsx`: 5 passed
+- `src/test/FileViewerPanel.test.tsx`: 6 passed (renders preview/raw, switches tabs, copy content, and keyboard resize a11y handle)
 - `src/test/ConversationRowAndHeader.test.tsx`: 5 passed
 - `src/test/App.test.tsx`: 3 passed
-- **Total Frontend Tests:** 50 passed in 10 test files (5.74s).
+- **Total Frontend Tests:** **51 passed** across 10 test files (5.40s).
 
-Frontend build (`tsc -b && vite build`) succeeded in 602ms.
+### Reconciliation of Earlier 50 vs. 51 Count (F6-14)
+An earlier draft cited 50 tests because `FileViewerPanel.test.tsx` was listed with 5 tests.
+The 6th test (`renders draggable resize handle and supports double-click reset and keyboard resizing`) was added during Phase 5 side-panel accessibility hardening. The true, reproducible frontend count across all 10 files is exactly **51 passed**.
+
+Frontend build (`tsc -b && vite build`) succeeded in 606ms.
 Frontend linter (`npx --prefix frontend oxlint`) reported 0 errors, 10 compiler notices.
 Zero frontend regressions detected.

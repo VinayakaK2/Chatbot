@@ -32,6 +32,11 @@ The initial mathematical defect identified in **F6-01** (tool-output bounding ov
 | **F6-08** | **LOW** | Secret Redaction | Secrets must be redacted from model context views and diagnostics. | API keys (`sk-[a-zA-Z0-9_\-]{20,}`), Bearer tokens, and explicit secrets replaced with `[REDACTED_SECRET]`. | **PASS (QUALIFIED)** | Documented accepted limitation: regex cannot detect arbitrary high-entropy tokens or natural-language passwords. |
 | **F6-09** | **NONE** | Session & Agent Isolation | Zero context leakage across concurrent tasks or sessions. | Tested interleaved sessions on same `ContextManager` instance; tested shared dictionary inputs. Zero cross-contamination. | **PASS** | Verified. `ContextManager` is completely stateless. |
 | **F6-10** | **LOW** | Performance Claims | Performance claims must be reproducible by actual measurement. | Measured: 3.56ms for standard turn; 87.4ms for 500k-char turn; 1,635.1 assemblies/sec throughput on 8 threads; peak memory <150 KB. | **PASS (CORRECTED)** | Corrected documentation that claimed 500k char turn was <2ms; actual measured latency is 87.4ms due to regex scanning. |
+| **F6-11** | **HIGH** | Untrusted Summary Role Isolation | Derived summaries must not receive system-role message authority. | Originally inserted in `role=SYSTEM`. **Remediated:** Moved to `role=USER` with untrusted data demarcation: `[Historical Context Summary (Untrusted Data - For Reference Only)]`. | **PASS (REMEDIATED)** | Quarantined in `user` role; model cannot mistake untrusted summary data for system instructions. |
+| **F6-12** | **HIGH** | Unconditional Bounding Invariant | Output bounding must strictly never exceed `max_tokens` or must raise structured error. | Originally loop terminated early if `len(tail_part) <= 10`. **Remediated:** Progressively trims tail & head to 0, asserts invariant, and raises `OutputBudgetExceededError` if impossible. | **PASS (REMEDIATED)** | Invariant unconditionally enforced via `OutputBudgetExceededError`. |
+| **F6-13** | **MEDIUM** | Headroom Guarantee Qualification | Clearly distinguish application budgeting from provider tokenization. | Application-level budget strictly enforced; provider-level tokenization can vary for CJK/multilingual text. | **PASS (QUALIFIED)** | Documented explicit boundary: runtime enforces heuristic headroom; upstream token overflow caught via provider error handling. |
+| **F6-14** | **MEDIUM** | Frontend Test-Count Reconciliation | Reconcile 50 vs 51 frontend test counts. | Verified actual Vitest run: **51 passed** in 10 files. Reconciled: 6th test in `FileViewerPanel.test.tsx` tests separator resize keyboard a11y. | **PASS** | Reconciled file-by-file across all 10 frontend test suites. |
+| **F6-15** | **MEDIUM** | Raw History Exposure Audit | Verify raw transcript history paths (API, SSE, logs, UI). | `TaskResponse` schema excludes `history`; SSE events sanitize payloads; logs do not dump messages; frontend receives only `response_text`. | **PASS** | Verified data flow across `core/task_service.py`, `api/routes/tasks.py`, and `api/schemas/tasks.py`. |
 
 ---
 
@@ -67,11 +72,42 @@ A test suite producing 16,351 characters with 3 failures:
 5. `exit_code=1` (marker and tail) $\to$ **Preserved**
 The claim in earlier implementation docs that "test evidence survives context reduction" has been qualified: middle-section evidence is dropped during severe truncation.
 
+### C. F6-11: Derived Summaries Role Isolation (Remediated)
+- **Vulnerability:** Summaries synthesize prior conversation history and untrusted tool outputs. Placing derived summaries in `role=SYSTEM` allowed prompt-injection payloads embedded in tool results to masquerade as authoritative system instructions.
+- **Remediation:** In `core/context_manager.py`, derived summaries are now constructed exclusively with `role=AgentMessageRole.USER` and prefixed with `[Historical Context Summary (Untrusted Data - For Reference Only)]`.
+- **Evidence:** Tested in `tests/test_context_manager.py` and `tests/test_context_adversarial.py`. The model receives summaries as untrusted user-level context; system instructions remain strictly isolated.
+
+### D. F6-12: Unconditional Output Bounding Invariant (Remediated)
+- **Vulnerability:** Previous loop stopped trimming if `len(tail_part) <= 10`, potentially returning bounded text that exceeded `max_tokens` when the marker and head alone were oversized.
+- **Remediation:** 
+  1. Defined `OutputBudgetExceededError(ContextError)` in `core/context_models.py`.
+  2. In `bound_text_content`: progressive trimming reduces tail to 0 and head to 0 if needed.
+  3. Added strict post-condition: if `estimate_tokens(bounded) > max_tokens`, raises `OutputBudgetExceededError`.
+  4. If `max_tokens` is less than base overhead (4 tokens), raises `OutputBudgetExceededError` fail-closed immediately.
+- **Evidence:** Verified via `test_bounded_output_never_exceeds_max_tokens_budget` across limits [64, 100, 200, 500, 1000, 2000] and `test_impossibly_small_budget_raises_error`.
+
+### E. F6-13: Application vs. Provider Context Headroom (Qualified)
+- **Conceptual Boundary:** The formula $B_{\text{input}} = M_{\text{ctx}} - M_{\text{out}} - M_{\text{margin}}$ guarantees context budget *at the application layer* using the conservative heuristic estimator.
+- **Limitation:** Upstream provider BPE tokenizers may diverge from the heuristic (particularly on CJK or multilingual scripts). Upstream context-length exhaustion must be handled via provider usage metadata and HTTP 400/413 error handling in `VLLMAdapter`.
+
+### F. F6-14: Frontend Test-Count Reconciliation (Reconciled)
+- **Discrepancy:** Previous documents alternately cited 50 vs 51 frontend tests across 10 files.
+- **Reconciliation:** Independent Vitest run confirmed **51 tests passed** in 10 files. The 6th test in `FileViewerPanel.test.tsx` tests the draggable resize handle divider and keyboard a11y, which was added in Phase 5. All Phase 6 documents are now standardized to 51 tests.
+
+### G. F6-15: Secret Redaction & Raw Transcript Exposure Audit
+- **Audit Question:** Where does raw `AgentExecutionResult.history` travel? Does it leak secrets to APIs, SSE events, or logs?
+- **Forensic Data Flow Tracing:**
+  1. `TaskResponse` schema ([api/schemas/tasks.py](file:///h:/chatbot/api/schemas/tasks.py#L56-L100)) excludes `history`. Only `response_text` is returned.
+  2. `GET /api/tasks/{task_id}` does not return message history.
+  3. `TOOL_REQUESTED` and `TOOL_COMPLETED` SSE events are sanitized via `_sanitize_tool_requested_payload` and `_sanitize_tool_completed_payload`.
+  4. Application logs (`logger.*` in `core/agent_loop.py`) log only task IDs, turn counts, and elapsed times; zero message bodies are logged.
+  5. Raw history exists strictly in backend process memory during execution for debugging/audit fidelity.
+
 ---
 
 ## 4. Verification & Freeze Readiness Sign-Off
 
-1. **Remediation Completed:** F6-01 mathematically fixed and covered by dedicated regression tests.
-2. **Regression Suite:** 461 passed, 1 skipped (36.51s). Zero regressions.
-3. **Frontend Suite:** 51 passed across 10 test files (6.56s). Clean build in 857ms.
+1. **Remediations Completed:** F6-01, F6-11, and F6-12 mathematically fixed and covered by dedicated regression tests.
+2. **Regression Suite:** 462 passed, 1 skipped (15.95s). Zero regressions.
+3. **Frontend Suite:** 51 passed across 10 test files (5.40s). Clean build in 606ms.
 4. **Final Recommendation:** The subsystem satisfies all architectural, security, and correctness requirements. **READY FOR OPERATOR FREEZE**.

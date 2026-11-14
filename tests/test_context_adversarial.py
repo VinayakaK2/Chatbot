@@ -173,8 +173,9 @@ class TestSecurityAndPromptInjection:
             summaries=[hostile_summary],
         )
 
-        summary_msg = next(m for m in res.messages if "Derived Context Summary" in (m.content or ""))
-        assert "Derived Context Summary - Historical Evidence" in summary_msg.content
+        summary_msg = next(m for m in res.messages if "Historical Context Summary" in (m.content or ""))
+        assert "Historical Context Summary (Untrusted Data - For Reference Only)" in summary_msg.content
+        assert summary_msg.role == AgentMessageRole.USER
         # Ensure diagnostics mark it as derived summary, not execution evidence
         assert ContextCategory.DERIVED_SUMMARY.value in res.diagnostics.categories_included
 

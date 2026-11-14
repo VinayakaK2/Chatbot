@@ -18,6 +18,7 @@ from core.context_models import (
     ContextItem,
     DerivedSummary,
     MandatoryContextOverflowError,
+    OutputBudgetExceededError,
 )
 from core.context_manager import (
     ContextManager,
@@ -95,6 +96,14 @@ class TestToolOutputBounding:
             )
             assert truncated is True
             assert estimate_tokens(bounded) <= tok_limit
+
+    def test_impossibly_small_budget_raises_error(self) -> None:
+        """Verify that an impossibly small token limit raises OutputBudgetExceededError fail-closed."""
+        huge_payload = "data " * 1000
+        # 5 tokens is less than base overhead (4 * 1.15 = 4.6), so cannot fit anything
+        with pytest.raises(OutputBudgetExceededError) as exc_info:
+            bound_text_content(huge_payload, max_tokens=4)
+        assert "less than base overhead" in str(exc_info.value)
 
 
 class TestDeterministicAssembly:
@@ -258,9 +267,10 @@ class TestSummaryProvenance:
             summaries=[summary],
         )
 
-        # Ensure summary message exists and is explicitly marked as derived historical evidence
-        summary_msgs = [m for m in res.messages if "Derived Context Summary" in (m.content or "")]
+        # Ensure summary message exists and is explicitly quarantined as untrusted user role
+        summary_msgs = [m for m in res.messages if "Historical Context Summary" in (m.content or "")]
         assert len(summary_msgs) == 1
+        assert summary_msgs[0].role == AgentMessageRole.USER
         assert "sum_42" in summary_msgs[0].content
         assert summary.text in summary_msgs[0].content
         assert res.diagnostics.items_included_count >= 2

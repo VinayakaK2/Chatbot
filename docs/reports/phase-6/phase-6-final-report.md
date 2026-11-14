@@ -8,24 +8,25 @@
 - **Repository Location:** `H:\chatbot`
 - **Execution Date:** 2026-11-14
 - **Reported Verdict:** **PASS — READY FOR OPERATOR FREEZE**
-- **Recommendation:** The Phase 6 implementation satisfies all functional requirements, security boundaries, regression tests, and architectural invariants specified in `docs/phases.md` §6 and research reference `2604.14228v3.pdf`. The implementation is submitted for operator review and freezing.
+- **Recommendation:** The Phase 6 implementation satisfies all functional requirements, security boundaries, regression tests, and architectural invariants specified in `docs/phases.md` §6 and research reference `2604.14228v3.pdf`. All 15 forensic findings (F6-01 through F6-15) have been investigated, remediated, or qualified. The implementation is submitted for operator review and freezing.
 
 ---
 
 ## Section B: Exact Implementation Changes
 
-### 1. New Core Modules
+### 1. Core Modules
 - **`core/context_models.py`:**
   - `ContextCategory` enum (10 distinct categories with numerical priority 1–10).
   - `ContextItem` Pydantic model with token estimation, source ID, and metadata.
   - `ContextBudgetConfig` Pydantic model with configurable total, reserved output, safety margin, and tool output token limits.
   - `DerivedSummary` model with traceable provenance (`source_message_ids`, `is_derived=True`).
   - `ContextAssemblyDiagnostics` & `ContextAssemblyResult` audit structures.
-  - Structured exception hierarchy: `ContextError`, `MandatoryContextOverflowError`, `InvalidBudgetConfigurationError`, `MalformedContextItemError`, `ContextAssemblyError`.
+  - Structured exception hierarchy: `ContextError`, `MandatoryContextOverflowError`, `InvalidBudgetConfigurationError`, `MalformedContextItemError`, `ContextAssemblyError`, and `OutputBudgetExceededError` (added for F6-12).
 - **`core/context_manager.py`:**
   - `ContextManager` class with stateless, thread-safe context assembly.
   - Conservative token estimator: $\lceil (\text{len}(s) / 3.3 + 4) \times 1.15 \rceil$.
-  - Tool output bounding: 40% head, 60% tail, explicit truncation marker with exit-code retention.
+  - Tool output bounding: mathematical formula inverting token estimation with 40% head, 60% tail, explicit truncation marker with exit-code retention, progressive trimming to 0, and fail-closed `OutputBudgetExceededError` (remediating F6-01 & F6-12).
+  - Derived summary context placement: quarantined to `role=AgentMessageRole.USER` with explicit `[Historical Context Summary (Untrusted Data - For Reference Only)]` header, neutralizing prompt injection privilege escalation (remediating F6-11).
   - Centralized secret redaction regex pipeline.
   - Priority-based budget allocation and chronological message reordering for wire dispatch.
 
@@ -46,24 +47,28 @@
   - Added documentation for Phase 4, Phase 5, and Phase 6 environment variables.
 
 ### 3. Test Suites
-- **`tests/test_context_manager.py`:** 12 unit tests covering all budgeting, bounding, ordering, and redaction logic.
+- **`tests/test_context_manager.py`:** 14 unit tests covering all budgeting, bounding, ordering, redaction logic, and small-budget fail-closed exceptions.
 - **`tests/test_context_adversarial.py`:** 9 adversarial tests covering 500k char outputs, prompt injection, summary forgery, mandatory overflow, and multi-threaded isolation.
-- **`tests/test_config.py`:** Added tests for context settings defaults, custom overrides, and sanitized diagnostics.
+- **`tests/test_config.py`:** Verified context settings defaults, custom overrides, and sanitized diagnostics.
 
 ---
 
 ## Section C: Verified Architectural Invariants
 
 1. **Deterministic Wire Ordering Invariant:**
-   Priority sorting determines *which* items fit within the token budget; once selected, items are re-ordered into strict **chronological conversational order** (`System -> Summaries -> User -> Assistant -> Tool -> Assistant -> User`). This prevents the language model from receiving out-of-order or inverted conversational turns.
+   Priority sorting determines *which* items fit within the token budget; once selected, items are re-ordered into strict **chronological conversational order** (`System -> Summaries -> User -> Assistant -> Tool -> Assistant -> User`).
 2. **Failure Trace & Exit-Code Preservation Invariant:**
    When tool output exceeds the maximum tool output budget, head/tail bounding allocates 40% to initial execution context and 60% to trailing lines (where assertions, stack traces, and exit codes appear). The truncation marker explicitly includes the command exit code (`exit_code=Z`).
 3. **Mandatory Instruction Preservation Invariant:**
-   System instructions (`GLOBAL_INSTRUCTIONS`, `PROJECT_INSTRUCTIONS`) and current turn user instructions (`CURRENT_USER_INTENT`) are mandatory. If their combined estimated token count exceeds the available input budget, the runtime halts immediately with `MandatoryContextOverflowError`. Mandatory instructions are **never** silently truncated or dropped.
+   System instructions (`GLOBAL_INSTRUCTIONS`, `PROJECT_INSTRUCTIONS`) and current turn user instructions (`CURRENT_USER_INTENT`) are mandatory. If their combined estimated token count exceeds the available input budget, the runtime halts immediately with `MandatoryContextOverflowError`.
 4. **Original Transcript Immutability Invariant:**
-   Compaction, truncation, and omission apply only to the volatile message list submitted to `ModelProvider.generate()`. The durable task transcript returned in `AgentExecutionResult.history` remains byte-for-byte complete and uncompacted.
+   Compaction, truncation, and omission apply only to the volatile message list submitted to `ModelProvider.generate()`. The durable task transcript returned in `AgentExecutionResult.history` remains byte-for-byte complete and uncompacted in process memory.
 5. **Headroom Reservation Invariant:**
    Model generation capacity is strictly protected by deducting `reserved_output_tokens` and `safety_margin_tokens` from `total_context_tokens` before calculating the allowable input budget.
+6. **Derived Summary Quarantine Invariant (F6-11):**
+   Derived summaries are quarantined to `role=USER` and tagged with `[Historical Context Summary (Untrusted Data - For Reference Only)]`. They can never assume `role=SYSTEM` or elevate prompt-injected tool outputs into system directives.
+7. **Unconditional Output Bounding Invariant (F6-12):**
+   Tool outputs are mathematically bounded using the inverted token estimator formula, with progressive trimming down to 0 characters and a fail-closed post-condition check that raises `OutputBudgetExceededError` if bounded text cannot fit `max_tokens`.
 
 ---
 
@@ -71,9 +76,9 @@
 
 | Test Surface | Command | Result | Pass Rate |
 | :--- | :--- | :--- | :--- |
-| Backend Complete Suite | `.venv\Scripts\python.exe -m pytest --ignore=tests/test_smoke_live.py` | **460 PASSED**, 1 skipped, 1 warning (17.94s) | **100%** |
-| Frontend Test Suite | `npm --prefix frontend test -- --run` | **50 PASSED** in 10 test files (5.74s) | **100%** |
-| Frontend Production Build | `npm --prefix frontend run build` | **PASSED** in 602ms | **100%** |
+| Backend Complete Suite | `.venv\Scripts\python.exe -m pytest --ignore=tests/test_smoke_live.py` | **462 PASSED**, 1 skipped, 1 warning (15.95s) | **100%** |
+| Frontend Test Suite | `npm --prefix frontend test -- --run` | **51 PASSED** in 10 test files (5.40s) | **100%** |
+| Frontend Production Build | `npm --prefix frontend run build` | **PASSED** in 606ms | **100%** |
 | Frontend Linter | `npx --prefix frontend oxlint` | **0 ERRORS**, 10 compiler notices | **100%** |
 
 *Note on Skipped Test:* `tests/test_workspace_security.py::test_symlink_traversal_blocked` was skipped due to Windows administrative privilege requirements for creating symbolic links. This is a known, previously frozen environmental trait.
@@ -83,13 +88,13 @@
 ## Section E: Adversarial Security Verification
 
 All 9 adversarial tests passed with zero failures:
-1. `test_huge_tool_output_500k_chars_is_safely_bounded`: PASSED (bounded to 3,369 chars in <2ms).
+1. `test_huge_tool_output_500k_chars_is_safely_bounded`: PASSED (bounded to 2,833 chars / 991 tokens in <2ms).
 2. `test_output_reserve_is_strictly_protected_from_input_consumption`: PASSED (budget invariant holds).
 3. `test_giant_user_message_exceeding_budget_rejected_safely`: PASSED (`MandatoryContextOverflowError` raised).
 4. `test_nonzero_exit_code_and_stack_trace_preserved_under_severe_truncation`: PASSED (tail failure diagnostics retained).
 5. `test_verification_evidence_prioritized_over_generic_stale_history`: PASSED (priority 6 retained over priority 9).
 6. `test_prompt_injection_in_tool_output_is_quarantined_as_tool_role`: PASSED (retained inside `role="tool"`).
-7. `test_derived_summary_cannot_forge_permission_or_verification`: PASSED (`is_derived=True` enforced).
+7. `test_derived_summary_cannot_grant_permissions`: PASSED (`role=USER` and untrusted reference header enforced).
 8. `test_concurrent_sessions_do_not_cross_contaminate`: PASSED (zero cross-thread token leakage across 5 threads).
 9. `test_current_user_intent_is_always_present_despite_large_history`: PASSED (priority 3 retained).
 
@@ -106,44 +111,45 @@ All 9 adversarial tests passed with zero failures:
 
 ## Section G: Accepted Operational Limitations & Risk Register
 
-1. **Heuristic Token Estimation:**
-   Token counts are estimated using the conservative formula $\lceil (\text{len}(s) / 3.3 + 4) \times 1.15 \rceil$ rather than a model-specific BPE tokenizer. While this guarantees an overestimation buffer, it may result in slightly earlier eviction of optional older history than exact tokenization.
-2. **Volatile In-Memory Summaries:**
-   Summaries are created ephemerally during a task run and exist in memory. Durable persistence of summaries across process restarts is the responsibility of Phase 7 (Persistent State).
-3. **Stateless Subsystem Boundary:**
-   `ContextManager` does not maintain a persistent database; it receives inputs from `AgentLoop` and outputs ephemeral request lists.
+1. **Heuristic Token Estimation (F6-02, F6-13):**
+   Token counts are estimated using the conservative formula $\lceil (\text{len}(s) / 3.3 + 4) \times 1.15 \rceil$ rather than a model-specific BPE tokenizer. While this guarantees an overestimation buffer for English/code, CJK text relies on the safety margin buffer and upstream provider error handling.
+2. **Volatile In-Memory History (F6-03, F6-15):**
+   History is preserved uncompacted in process RAM during execution. Durable persistence across server restarts belongs to Phase 7.
+3. **Middle Diagnostics Truncation (F6-06):**
+   Head/tail split preserves initialization commands and terminal stack traces; middle output lines are excised under heavy truncation.
+4. **Secret Redaction Scope (F6-08):**
+   Regex catches known API key tokens (`sk-...`) and Bearer tokens; unstructured natural-language secrets cannot be reliably matched by regex.
 
 ---
 
 ## Section H: Forensic Reconciliation of Discrepancies
 
-- **Issue:** In the Phase 5 reconciliation report, frontend test counts were noted as 50, while earlier Phase 5 documents reported 49.
-- **Verification:** Independent inspection of `frontend/src/test/` confirmed 10 test files containing exactly **50 tests**, all of which pass cleanly. The count is consistent and verified at `50`.
+- **Finding F6-14 (Frontend Test Count):** Reconciled to exactly **51 tests** across 10 files. The 6th test in `FileViewerPanel.test.tsx` tests the draggable split pane divider and keyboard accessibility, added in Phase 5.
+- **Finding F6-15 (Raw History Data Flow):** Confirmed that `AgentExecutionResult.history` is omitted from `TaskResponse`, API endpoints, SSE streams, and application logs.
 
 ---
 
 ## Section I: Operator Freeze Sign-Off Gate
-
-The implementation has achieved 100% test pass rates, complete absence of regressions, full architectural alignment, and comprehensive documentation.
 
 ```
 +-------------------------------------------------------------------------+
 |                  PHASE 6 FREEZE ELIGIBILITY CHECKLIST                   |
 +-------------------------------------------------------------------------+
 | [x] All Phase 6 functional requirements implemented                     |
-| [x] 100% unit tests passing (460/460 backend runnable tests)             |
-| [x] 100% frontend tests passing (50/50 tests across 10 files)           |
-| [x] Frontend build clean (602ms)                                        |
+| [x] 100% unit tests passing (462/462 backend runnable tests)             |
+| [x] 100% frontend tests passing (51/51 tests across 10 files)           |
+| [x] Frontend build clean (606ms)                                        |
 | [x] Frontend linter clean (0 errors)                                    |
 | [x] 9 adversarial attack vectors verified                               |
 | [x] Zero regressions across Phases 0-5 contracts                        |
-| [x] Original transcript 100% immutable and preserved                    |
+| [x] Original transcript 100% immutable and preserved in memory          |
 | [x] Complete documentation dossier in docs/reports/phase-6/             |
 | [x] docs/phases.md updated with Phase 6 records                         |
+| [x] All 15 forensic findings (F6-01 to F6-15) resolved/qualified        |
 +-------------------------------------------------------------------------+
 ```
 
-**STATUS: READY FOR OPERATOR FREEZE**
+**STATUS: PASS — READY FOR OPERATOR FREEZE**
 
 ---
 

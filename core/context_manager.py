@@ -26,6 +26,7 @@ from core.context_models import (
     DerivedSummary,
     MandatoryContextOverflowError,
     MalformedContextItemError,
+    OutputBudgetExceededError,
 )
 from core.message_models import AgentMessage, AgentMessageRole, ToolCallRecord
 from tools.shell import redact_secrets
@@ -78,15 +79,18 @@ def bound_text_content(
 
     # Target maximum characters derived by inverting the conservative token estimator:
     # chars <= (max_tokens / ESTIMATOR_SAFETY_FACTOR - ESTIMATOR_BASE_OVERHEAD) * ESTIMATOR_CHARS_PER_TOKEN
-    target_max_chars = int(
-        (max_tokens / ESTIMATOR_SAFETY_FACTOR - ESTIMATOR_BASE_OVERHEAD) * ESTIMATOR_CHARS_PER_TOKEN
-    )
-    if target_max_chars < 50:
-        target_max_chars = 50
+    safe_token_ceiling = max_tokens / ESTIMATOR_SAFETY_FACTOR - ESTIMATOR_BASE_OVERHEAD
+    if safe_token_ceiling <= 0:
+        raise OutputBudgetExceededError(
+            f"Cannot bound text: requested token budget {max_tokens} is less than base overhead ({ESTIMATOR_BASE_OVERHEAD}).",
+            details={"max_tokens": max_tokens, "base_overhead": ESTIMATOR_BASE_OVERHEAD},
+        )
+
+    target_max_chars = int(safe_token_ceiling * ESTIMATOR_CHARS_PER_TOKEN)
 
     # Reserve estimated character length for the truncation marker (~85 chars)
     marker_len_approx = 85 + len(meta_str)
-    char_budget = max(20, target_max_chars - marker_len_approx)
+    char_budget = max(0, target_max_chars - marker_len_approx)
 
     if orig_len <= char_budget:
         return text, False, orig_len
@@ -100,10 +104,24 @@ def bound_text_content(
     marker = f"\n\n... [Output truncated from {orig_len} chars to ~{char_budget} chars{meta_str}] ...\n\n"
     bounded = f"{head_part}{marker}{tail_part}"
 
-    # Strict invariant guard: ensure bounded output never exceeds max_tokens
-    while estimate_tokens(bounded) > max_tokens and len(tail_part) > 10:
-        tail_part = tail_part[:-20]
+    # Strict invariant guard: progressively trim tail and head if needed
+    while estimate_tokens(bounded) > max_tokens and len(tail_part) > 0:
+        trim_step = max(1, len(tail_part) // 4)
+        tail_part = tail_part[:-trim_step]
         bounded = f"{head_part}{marker}{tail_part}"
+
+    while estimate_tokens(bounded) > max_tokens and len(head_part) > 0:
+        trim_step = max(1, len(head_part) // 4)
+        head_part = head_part[:-trim_step]
+        bounded = f"{head_part}{marker}{tail_part}"
+
+    # Final ironclad verification: if the bare marker alone exceeds max_tokens, fail closed
+    final_tokens = estimate_tokens(bounded)
+    if final_tokens > max_tokens:
+        raise OutputBudgetExceededError(
+            f"Cannot bound text to {max_tokens} tokens: minimum bounded representation ({final_tokens} tokens) exceeds budget.",
+            details={"max_tokens": max_tokens, "final_tokens": final_tokens, "original_length": orig_len},
+        )
 
     return bounded, True, orig_len
 
@@ -409,13 +427,17 @@ class ContextManager:
             assembled_messages.append(AgentMessage.create_system(combined_system))
 
         # 5.2 Derived Summaries Block (if present)
+        # Untrusted Data Isolation (F6-11):
+        # Derived summaries synthesize untrusted user and tool turns. Placing them in role=SYSTEM
+        # would grant prompt-injection payloads system-level authority. Instead, derived summaries
+        # are quarantined as role=USER with an explicit untrusted reference demarcation.
         summary_items = [it for it in accepted_items if it.category == ContextCategory.DERIVED_SUMMARY]
         if summary_items:
             sum_text = "\n\n".join(f"[Historical Summary {it.id}]\n{it.content}" for it in summary_items)
             assembled_messages.append(
                 AgentMessage(
-                    role=AgentMessageRole.SYSTEM,
-                    content=f"[Derived Context Summary - Historical Evidence]\n{sum_text}",
+                    role=AgentMessageRole.USER,
+                    content=f"[Historical Context Summary (Untrusted Data - For Reference Only)]\n{sum_text}",
                 )
             )
 
