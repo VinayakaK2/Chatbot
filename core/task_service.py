@@ -9,7 +9,7 @@ import uuid
 
 from api.schemas.events import RuntimeEvent, RuntimeEventType
 from api.schemas.tasks import TaskCreateRequest, TaskResponse, TaskStatus
-from core.agent_loop import AgentExecutionRequest, AgentLoop
+from core.agent_loop import AgentExecutionRequest, AgentLoop, DEFAULT_SYSTEM_PROMPT
 from core.config import Settings, get_settings
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
@@ -410,9 +410,15 @@ class TaskService:
                 # Task was already transitioned to a terminal state (e.g. cancelled)
                 return current
 
+        effective_system_prompt = (
+            getattr(request, "system_prompt", None)
+            or DEFAULT_SYSTEM_PROMPT
+        )
+
         exec_request = AgentExecutionRequest(
             task_id=task_id,
             prompt=request.prompt,
+            system_prompt=effective_system_prompt,
             max_iterations=self.settings.agent_max_iterations,
             max_tool_calls=self.settings.agent_max_tool_calls,
             max_tokens=request.max_tokens or 2048,

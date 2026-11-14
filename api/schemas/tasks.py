@@ -38,6 +38,10 @@ class TaskCreateRequest(BaseModel):
         le=2.0,
         description="Sampling temperature for the generation",
     )
+    system_prompt: Optional[str] = Field(
+        default=None,
+        description="Optional custom system prompt directive for the agent",
+    )
 
     @field_validator("prompt")
     @classmethod

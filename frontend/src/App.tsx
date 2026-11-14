@@ -200,13 +200,14 @@ export const App: React.FC = () => {
         {
           id: 'demo-msg-conv-user',
           role: 'user',
-          content: 'Hello, who are you?',
+          content: 'Hello, who are you and how are you doing?',
           timestamp: new Date().toISOString(),
         },
         {
           id: 'demo-msg-conv-assistant',
           role: 'assistant',
-          content: 'I am your autonomous software engineering assistant. How can I help you today?',
+          content:
+            '### Hello there! 👋\n\nI am **Antigravity**, an autonomous agentic AI coding assistant and runtime operating system. I am running smoothly and ready for engineering tasks!\n\nHere is what I can help you with:\n- **Full-Stack Development:** Build deployable features with React, TypeScript, and FastAPI.\n- **Autonomous Verification:** Design test suites, execute tests, and verify code.\n- **Repository Intelligence:** Trace architecture, call graphs, and inspect live systems.\n\n> "Every response is rendered through our streaming Markdown engine with Google Fonts typography."\n\nHow can I help you build or inspect your project today?',
           timestamp: new Date().toISOString(),
           model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
           status: 'completed',

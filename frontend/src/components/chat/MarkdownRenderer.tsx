@@ -14,9 +14,9 @@ export interface MarkdownRendererProps {
 
 // Inline token rendering for bold, italic, inline code, and links
 function renderInlineFormatting(text: string): React.ReactNode[] {
-  // Regex matches: inline code, bold, italic, strikethrough, markdown link
+  // Regex matches: inline code, bold (**, __), italic (*, _), strikethrough (~~), markdown link [text](url)
   const inlineRegex =
-    /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|\[([^\]]+)\]\(([^)]+)\))/g
+    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[([^\]]+)\]\(([^)]+)\))/g
 
   const nodes: React.ReactNode[] = []
   let lastIndex = 0
@@ -34,13 +34,19 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
           {token.slice(1, -1)}
         </code>
       )
-    } else if (token.startsWith('**') && token.endsWith('**')) {
+    } else if (
+      (token.startsWith('**') && token.endsWith('**')) ||
+      (token.startsWith('__') && token.endsWith('__'))
+    ) {
       nodes.push(
         <strong key={match.index} className="font-semibold">
           {token.slice(2, -2)}
         </strong>
       )
-    } else if (token.startsWith('*') && token.endsWith('*')) {
+    } else if (
+      (token.startsWith('*') && token.endsWith('*')) ||
+      (token.startsWith('_') && token.endsWith('_'))
+    ) {
       nodes.push(
         <em key={match.index} className="italic">
           {token.slice(1, -1)}
@@ -255,36 +261,36 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       flushList(`list-${i}`)
     }
 
-    if (line.startsWith('# ')) {
-      blocks.push(
-        <h1 key={`h1-${i}`} className="markdown-h1">
-          {renderInlineFormatting(line.slice(2))}
-        </h1>
-      )
-      continue
-    }
-    if (line.startsWith('## ')) {
-      blocks.push(
-        <h2 key={`h2-${i}`} className="markdown-h2">
-          {renderInlineFormatting(line.slice(3))}
-        </h2>
-      )
-      continue
-    }
-    if (line.startsWith('### ')) {
-      blocks.push(
-        <h3 key={`h3-${i}`} className="markdown-h3">
-          {renderInlineFormatting(line.slice(4))}
-        </h3>
-      )
-      continue
-    }
-    if (line.startsWith('#### ')) {
-      blocks.push(
-        <h4 key={`h4-${i}`} className="markdown-h4">
-          {renderInlineFormatting(line.slice(5))}
-        </h4>
-      )
+    // Headings (H1 to H6)
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const title = headingMatch[2]
+      if (level === 1) {
+        blocks.push(
+          <h1 key={`h1-${i}`} className="markdown-h1">
+            {renderInlineFormatting(title)}
+          </h1>
+        )
+      } else if (level === 2) {
+        blocks.push(
+          <h2 key={`h2-${i}`} className="markdown-h2">
+            {renderInlineFormatting(title)}
+          </h2>
+        )
+      } else if (level === 3) {
+        blocks.push(
+          <h3 key={`h3-${i}`} className="markdown-h3">
+            {renderInlineFormatting(title)}
+          </h3>
+        )
+      } else {
+        blocks.push(
+          <h4 key={`h4-${i}`} className="markdown-h4">
+            {renderInlineFormatting(title)}
+          </h4>
+        )
+      }
       continue
     }
 

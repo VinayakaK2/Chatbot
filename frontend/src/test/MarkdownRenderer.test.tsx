@@ -62,4 +62,34 @@ describe('MarkdownRenderer Component', () => {
     expect(screen.getByText('Core')).toBeDefined()
     expect(screen.getByText('Agent Loop')).toBeDefined()
   })
+
+  it('renders links, bold, italics, and blockquotes cleanly', () => {
+    const md = 'Check [Documentation](https://example.com) with **bold** and _italic_ text.\n\n> Important architectural note.'
+    const { container } = render(<MarkdownRenderer content={md} />)
+
+    const link = screen.getByText('Documentation') as HTMLAnchorElement
+    expect(link).toBeDefined()
+    expect(link.getAttribute('href')).toBe('https://example.com')
+    expect(link.className).toBe('markdown-link')
+
+    const bold = screen.getByText('bold')
+    expect(bold.tagName).toBe('STRONG')
+
+    const italic = screen.getByText('italic')
+    expect(italic.tagName).toBe('EM')
+
+    const quote = container.querySelector('.markdown-blockquote')
+    expect(quote).toBeDefined()
+    expect(quote?.textContent).toContain('Important architectural note.')
+  })
+
+  it('renders multi-level headings (H1, H2, H3, H4)', () => {
+    const headingsMd = '# Level 1\n## Level 2\n### Level 3\n#### Level 4'
+    render(<MarkdownRenderer content={headingsMd} />)
+
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Level 1')
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Level 2')
+    expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('Level 3')
+    expect(screen.getByRole('heading', { level: 4 }).textContent).toBe('Level 4')
+  })
 })

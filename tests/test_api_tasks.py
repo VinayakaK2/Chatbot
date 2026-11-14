@@ -102,6 +102,46 @@ class TestTaskEndpoints:
         assert mock_provider.invoked is True
         assert mock_provider.last_prompt == "Explain dependency injection."
 
+    async def test_task_submission_applies_default_system_prompt(self) -> None:
+        """Verify task execution initializes with default markdown system prompt directive."""
+        mock_provider = MockModelProvider(response_text="### Status\n- Operational")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/tasks",
+                json={"prompt": "How are you?"},
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["response_text"] == "### Status\n- Operational"
+
+    async def test_task_submission_with_custom_system_prompt(self) -> None:
+        """Verify custom system prompt in TaskCreateRequest is accepted and dispatched."""
+        mock_provider = MockModelProvider(response_text="Custom markdown answer")
+        service = TaskService(Settings(), model_provider=mock_provider)
+        set_task_service(service)
+
+        app = create_app(Settings())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/tasks",
+                json={
+                    "prompt": "How are you?",
+                    "system_prompt": "You are a specialized mathematical assistant.",
+                },
+            )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "completed"
+
     async def test_task_timeout_error_state(self) -> None:
         """Verify task records failed status when upstream model request times out."""
         timeout_exc = ModelTimeoutError("Upstream model request timed out after 60.0s")
