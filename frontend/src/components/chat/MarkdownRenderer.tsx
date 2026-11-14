@@ -85,7 +85,17 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     return isStreaming ? <span className="streaming-cursor" aria-hidden="true" /> : null
   }
 
-  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  // Parse reasoning tags <think>...</think> only if explicitly emitted by reasoning models
+  let thoughtText: string | null = null
+  let textToParse = content
+
+  const thinkMatch = content.match(/<think>([\s\S]*?)(?:<\/think>|$)/i)
+  if (thinkMatch) {
+    thoughtText = thinkMatch[1].trim()
+    textToParse = content.replace(/<think>[\s\S]*?(?:<\/think>|$)/i, '').trim()
+  }
+
+  const lines = textToParse ? textToParse.replace(/\r\n/g, '\n').split('\n') : []
   const blocks: React.ReactNode[] = []
 
   let inCodeBlock = false
@@ -327,6 +337,14 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   return (
     <div className="markdown-body">
+      {thoughtText && (
+        <details className="thought-disclosure">
+          <summary className="thought-summary">
+            <span>Thought</span>
+          </summary>
+          <div className="thought-body">{thoughtText}</div>
+        </details>
+      )}
       {blocks}
       {isStreaming && <span className="streaming-cursor" aria-hidden="true" />}
     </div>

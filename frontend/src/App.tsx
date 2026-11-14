@@ -137,7 +137,29 @@ export const App: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const demo = params.get('demo')
-    if (demo !== 'active' && demo !== 'tools' && demo !== 'preview' && demo !== 'working') return
+    if (demo !== 'active' && demo !== 'tools' && demo !== 'preview' && demo !== 'working' && demo !== 'conversational') return
+
+    if (demo === 'conversational') {
+      const convMessages: Message[] = [
+        {
+          id: 'demo-msg-conv-user',
+          role: 'user',
+          content: 'Hello, who are you?',
+          timestamp: new Date().toISOString(),
+        },
+        {
+          id: 'demo-msg-conv-assistant',
+          role: 'assistant',
+          content: 'I am your autonomous software engineering assistant. How can I help you today?',
+          timestamp: new Date().toISOString(),
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          status: 'completed',
+          tool_activities: [],
+        },
+      ]
+      convMessages.forEach((m) => addMessageToActive(m))
+      return
+    }
 
     if (demo === 'working') {
       const workingMessages: Message[] = [

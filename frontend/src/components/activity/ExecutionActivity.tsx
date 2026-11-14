@@ -1,8 +1,9 @@
 /**
  * Execution Activity Engine Component.
  * Antigravity-style live execution status:
- * - Live in-flight: "Working" (0s) -> "Thinking (1s)" ... "Thinking (4s)" (or "Working (4s)")
- * - Completed: "Worked for 2m >" / "Thought for 4s" collapsible pill button
+ * - Live in-flight: "Working" (0s) -> "Working (1s)" ... "Working (4s)"
+ * - Completed with tools: "Worked for 2m >" collapsible pill button
+ * - No fake "Thinking" or "Thought for" indicators
  */
 
 import React, { useState, useEffect } from 'react'
@@ -50,7 +51,7 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
     return () => clearInterval(interval)
   }, [isRunning])
 
-  // 1. In-progress state: Clean minimal "Working" / "Thinking (Xs)"
+  // 1. In-progress state: Clean minimal "Working"
   if (isRunning) {
     const hasTools = toolActivities.length > 0
     return (
@@ -59,9 +60,7 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
           <span className="activity-working-label">
             {elapsedSeconds === 0
               ? 'Working'
-              : hasTools
-              ? `Working (${elapsedSeconds}s)`
-              : `Thinking (${elapsedSeconds}s)`}
+              : `Working (${elapsedSeconds}s)`}
           </span>
           <span className="activity-working-dots" aria-hidden="true">
             <span className="working-dot" />
@@ -138,18 +137,6 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
     )
   }
 
-  // Conversational response with elapsed thinking time
-  if (elapsedSeconds > 0) {
-    return (
-      <div className="execution-activity-container">
-        <div className="activity-worked-pill-wrapper">
-          <span className="activity-thought-label">
-            Thought for {formatDuration(elapsedSeconds)}
-          </span>
-        </div>
-      </div>
-    )
-  }
-
+  // Conversational response without tools: do not render any fake thought indicator
   return null
 }

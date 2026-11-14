@@ -1520,11 +1520,38 @@
   transform: rotate(90deg);
 }
 
-.activity-thought-label {
-  font-size: 12.5px;
+/* Explicit reasoning / thinking disclosure only when <think> tag is emitted by model */
+.thought-disclosure {
+  margin-bottom: 14px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+.thought-summary {
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-muted);
-  padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thought-summary:hover {
+  color: var(--text-secondary);
+}
+
+.thought-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
 }
 
 .activity-expanded-content {
