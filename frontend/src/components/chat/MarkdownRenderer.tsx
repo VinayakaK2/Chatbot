@@ -59,16 +59,42 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
         </del>
       )
     } else if (match[2] && match[3]) {
-      // Markdown link
+      const linkText = match[2]
+      const linkUrl = match[3]
+      const isFileLink =
+        linkUrl.startsWith('file:///') ||
+        linkUrl.endsWith('.md') ||
+        linkUrl.endsWith('.py') ||
+        linkUrl.endsWith('.ts') ||
+        linkUrl.endsWith('.tsx') ||
+        linkUrl.endsWith('.json') ||
+        linkUrl.startsWith('docs/') ||
+        linkUrl.startsWith('core/') ||
+        linkUrl.startsWith('api/') ||
+        linkUrl.startsWith('tests/')
+
+      const handleClick = (e: React.MouseEvent) => {
+        if (isFileLink) {
+          e.preventDefault()
+          window.dispatchEvent(
+            new CustomEvent('open-workspace-file', {
+              detail: { path: linkUrl, title: linkText },
+            })
+          )
+        }
+      }
+
       nodes.push(
         <a
           key={match.index}
-          href={match[3]}
-          target="_blank"
-          rel="noopener noreferrer"
+          href={linkUrl}
+          onClick={handleClick}
+          target={isFileLink ? undefined : '_blank'}
+          rel={isFileLink ? undefined : 'noopener noreferrer'}
           className="markdown-link"
+          title={isFileLink ? `Open in File Viewer: ${linkUrl}` : linkUrl}
         >
-          {match[2]}
+          {linkText}
         </a>
       )
     }

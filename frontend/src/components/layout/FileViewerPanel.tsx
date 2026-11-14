@@ -15,11 +15,9 @@ import {
   IconCheck,
   IconCopy,
   IconDiff,
-  IconDocument,
   IconFile,
   IconFileCode,
   IconPlus,
-  IconSplit,
   IconTerminal,
   IconX,
 } from '../common/Icons'
@@ -176,7 +174,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     if (!activeTab) return
     const textToCopy =
       activeTab.type === 'diff' && activeTab.diff
-        ? activeTab.diff.patch || activeTab.diff.after || ''
+        ? (activeTab.diff as any).patch || activeTab.diff.new_content || ''
         : activeTab.content
     try {
       await navigator.clipboard.writeText(textToCopy)

@@ -43,7 +43,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
       title: diff.file_path ? diff.file_path.split('/').pop() || 'Diff' : 'Diff',
       path: diff.file_path || 'workspace.diff',
       type: 'diff',
-      content: diff.patch || '',
+      content: (diff as any).patch || diff.new_content || '',
       diff: diff,
     })
   }

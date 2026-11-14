@@ -10,6 +10,9 @@ import type {
   TaskResponse,
   RuntimeEvent,
   ApiErrorResponse,
+  FileContentResponse,
+  GitDiffResponse,
+  WorkspaceFileItem,
 } from '../types/api'
 
 // Base URL defaults to relative path in dev (handled by Vite reverse proxy) or env override

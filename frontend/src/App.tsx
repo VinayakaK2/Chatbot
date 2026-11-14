@@ -19,8 +19,9 @@ import { useConversations } from './hooks/useConversations'
 import { useTaskStream } from './hooks/useTaskStream'
 import { useToast } from './hooks/useToast'
 import {
-  IconEye,
+  IconDocument,
   IconFileCode,
+  IconMoreVertical,
   IconSearch,
   IconShieldAlert,
   IconSidebar,
@@ -36,6 +37,7 @@ import type {
   ArtifactRecord,
   FileDiff,
   VerificationRecord,
+  GitDiffResponse,
 } from './types/api'
 
 const DEFAULT_PREVIEW_DIFF: FileDiff = {
@@ -112,6 +114,21 @@ export const App: React.FC = () => {
     command: string
     output: string
   } | null>(null)
+  const [gitDiffSummary, setGitDiffSummary] = useState<GitDiffResponse | null>(null)
+
+  // Query git diff for repository-wide change overview
+  const refreshGitDiff = useCallback(async () => {
+    try {
+      const diffData = await apiClient.getGitDiff()
+      if (diffData && diffData.files_changed_count > 0) {
+        setGitDiffSummary(diffData)
+      } else {
+        setGitDiffSummary(null)
+      }
+    } catch {
+      setGitDiffSummary(null)
+    }
+  }, [])
 
   // Probes system health and model readiness from backend
   const refreshSystemStatus = useCallback(async () => {
@@ -123,17 +140,64 @@ export const App: React.FC = () => {
       ])
       setHealth(h)
       setReadiness(r)
+      refreshGitDiff()
     } catch (err) {
       console.warn('System status probe notice:', err)
       addToast('Backend connection degraded or offline.', 'warning')
     } finally {
       setIsHealthLoading(false)
     }
-  }, [addToast])
+  }, [addToast, refreshGitDiff])
 
   useEffect(() => {
     refreshSystemStatus()
   }, [refreshSystemStatus])
+
+  // Listen for file link clicks dispatched from markdown
+  useEffect(() => {
+    const handleOpenFileEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; title?: string }>
+      if (customEvent.detail && customEvent.detail.path) {
+        let filePath = customEvent.detail.path
+        if (filePath.startsWith('file:///')) {
+          filePath = filePath.slice(8)
+          if (filePath.length >= 3 && filePath[0] === '/' && filePath[2] === ':') {
+            filePath = filePath.slice(1)
+          }
+        }
+        apiClient
+          .getFileContent(filePath)
+          .then((res) => {
+            setPreviewArtifact({
+              id: `file-${Date.now()}`,
+              title: res.name,
+              type: res.is_markdown ? 'markdown' : 'code',
+              content: res.content,
+              file_path: res.path,
+              language: res.language,
+              timestamp: new Date().toISOString(),
+            })
+            setPreviewDiff(null)
+            setIsPreviewOpen(true)
+          })
+          .catch(() => {
+            setPreviewArtifact({
+              id: `file-${Date.now()}`,
+              title: customEvent.detail.title || filePath.split('/').pop() || 'File',
+              type: filePath.endsWith('.md') ? 'markdown' : 'code',
+              content: `# ${filePath}\n\n*Unable to load file content from backend.*`,
+              file_path: filePath,
+              timestamp: new Date().toISOString(),
+            })
+            setPreviewDiff(null)
+            setIsPreviewOpen(true)
+          })
+      }
+    }
+
+    window.addEventListener('open-workspace-file', handleOpenFileEvent)
+    return () => window.removeEventListener('open-workspace-file', handleOpenFileEvent)
+  }, [])
 
   // Demo state loader for visual acceptance gate & verification (Section 9)
   useEffect(() => {
@@ -399,8 +463,11 @@ export const App: React.FC = () => {
         e.preventDefault()
         setIsSidebarCollapsed((prev) => !prev)
       }
-      // Toggle Preview Panel
-      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+      // Toggle File & Diff Viewer (Ctrl+Shift+D or Ctrl+P)
+      else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key.toLowerCase() === 'p' || (e.shiftKey && e.key.toLowerCase() === 'd'))
+      ) {
         e.preventDefault()
         setIsPreviewOpen((prev) => !prev)
       }
@@ -510,6 +577,38 @@ export const App: React.FC = () => {
     }
   }, [])
 
+  // Open right panel focused on Git diff review
+  const handleOpenDiffReview = useCallback(() => {
+    if (gitDiffSummary && gitDiffSummary.files.length > 0) {
+      const first = gitDiffSummary.files[0]
+      setPreviewDiff({
+        file_path: first.path,
+        added_lines: first.insertions,
+        removed_lines: first.deletions,
+        chunks: [
+          {
+            old_start: 1,
+            old_lines: first.deletions,
+            new_start: 1,
+            new_lines: first.insertions,
+            lines: first.patch
+              .split('\n')
+              .filter((l) => l.startsWith('+') || l.startsWith('-') || l.startsWith(' '))
+              .map((l) => ({
+                type: l.startsWith('+') ? 'add' : l.startsWith('-') ? 'delete' : 'context',
+                content: l,
+              })),
+          },
+        ],
+      })
+      setPreviewArtifact(null)
+      setIsPreviewOpen(true)
+    } else {
+      setPreviewDiff(DEFAULT_PREVIEW_DIFF)
+      setIsPreviewOpen(true)
+    }
+  }, [gitDiffSummary])
+
   const currentProject = projects.find(
     (p) => p.id === activeConversation?.project_id
   )
@@ -568,6 +667,21 @@ export const App: React.FC = () => {
           </div>
 
           <div className="header-right">
+            {gitDiffSummary && gitDiffSummary.files_changed_count > 0 && (
+              <button
+                type="button"
+                className="diff-review-chip"
+                onClick={handleOpenDiffReview}
+                title="Inspect repository changes"
+                aria-label="Review changed files"
+              >
+                <span>
+                  {gitDiffSummary.files_changed_count} files changed +{gitDiffSummary.insertions} -{gitDiffSummary.deletions} &rsaquo;
+                </span>
+                <span className="review-pill">Review</span>
+              </button>
+            )}
+
             <button
               type="button"
               className="header-btn"
@@ -582,13 +696,22 @@ export const App: React.FC = () => {
 
             <button
               type="button"
-              className="header-btn"
-              onClick={() => setIsPreviewOpen((prev) => !prev)}
-              title="Toggle Inspection Panel (Ctrl+P)"
-              aria-label="Toggle Inspection Panel"
+              className="header-icon-action-btn"
+              onClick={() => setIsSettingsOpen(true)}
+              title="Workspace Settings"
+              aria-label="Settings"
             >
-              <IconEye size={14} />
-              <span>Inspect</span>
+              <IconMoreVertical size={16} />
+            </button>
+
+            <button
+              type="button"
+              className={`header-icon-action-btn ${isPreviewOpen ? 'is-active' : ''}`}
+              onClick={() => setIsPreviewOpen((prev) => !prev)}
+              title="Toggle Files & Diff Viewer (Ctrl+Shift+D)"
+              aria-label="Toggle Files and Diff Viewer"
+            >
+              <IconDocument size={16} />
             </button>
           </div>
         </header>
