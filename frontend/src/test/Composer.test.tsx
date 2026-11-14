@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Composer } from '../components/chat/Composer'
 
 describe('Composer Component', () => {
@@ -59,5 +59,33 @@ describe('Composer Component', () => {
 
     fireEvent.click(stopBtn)
     expect(onStopGeneration).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads attached text file content and passes it to onSendMessage', async () => {
+    const onSendMessage = vi.fn()
+    const { container } = render(<Composer onSendMessage={onSendMessage} />)
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    expect(fileInput).toBeDefined()
+
+    const fakeFile = new File(['def add(a, b):\n    return a + b'], 'math.py', {
+      type: 'text/x-python',
+    })
+
+    fireEvent.change(fileInput, { target: { files: [fakeFile] } })
+
+    // Wait for attachment chip to appear in DOM after async file read
+    await waitFor(() => {
+      expect(screen.getByText('math.py')).toBeDefined()
+    })
+
+    const sendBtn = screen.getByRole('button', { name: /Send prompt/i })
+    fireEvent.click(sendBtn)
+
+    expect(onSendMessage).toHaveBeenCalledTimes(1)
+    const callArgs = onSendMessage.mock.calls[0]
+    expect(callArgs[1].length).toBe(1)
+    expect(callArgs[1][0].name).toBe('math.py')
+    expect(callArgs[1][0].content).toContain('def add(a, b):')
   })
 })

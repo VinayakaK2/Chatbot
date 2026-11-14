@@ -446,8 +446,23 @@ export const App: React.FC = () => {
       }
       addMessageToActive(assistantMessage)
 
-      // Step 3: Trigger backend task dispatch and live SSE streaming
-      executeTask(assistantMessageId, text, model)
+      // Step 3: Bundle attached files into prompt context so model receives full file content
+      let promptToSend = text
+      if (attachments && attachments.length > 0) {
+        const attachedContents = attachments
+          .filter((att) => att.content)
+          .map((att) => `\`\`\`${att.name}\n// Attached File: ${att.name} (${Math.round(att.size / 1024)} KB)\n${att.content}\n\`\`\``)
+          .join('\n\n')
+
+        if (attachedContents) {
+          promptToSend = text
+            ? `${text}\n\n### Attached Files:\n${attachedContents}`
+            : `Please inspect the following attached file(s):\n\n${attachedContents}`
+        }
+      }
+
+      // Step 4: Trigger backend task dispatch and live SSE streaming
+      executeTask(assistantMessageId, promptToSend, model)
     },
     [addMessageToActive, executeTask]
   )

@@ -98,17 +98,39 @@ export const Composer: React.FC<ComposerProps> = ({
     }
   }
 
-  // File Attachment handling
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // File Attachment handling — reads file text into attachment content
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
 
-    const newAttachments: AttachedFile[] = Array.from(files).map((file) => ({
-      id: `${file.name}-${Date.now()}-${Math.random()}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'text/plain',
-    }))
+    const fileList = Array.from(files)
+    const newAttachments: AttachedFile[] = await Promise.all(
+      fileList.map(async (file) => {
+        let content: string | undefined = undefined
+        const isImage = file.type.startsWith('image/')
+
+        if (isImage) {
+          content = `[Image Attached: ${file.name} (${Math.round(file.size / 1024)} KB) — Note: Current runtime model (Qwen2.5-Coder) is a pure text/code LLM without vision capability. Visual/image understanding requires a Vision-Language Model like Qwen2-VL or GPT-4o.]`
+        } else if (file.size > 1024 * 1024) {
+          content = `[File ${file.name} is too large (${Math.round(file.size / 1024)} KB > 1MB) to embed directly into prompt context]`
+        } else {
+          try {
+            content = await file.text()
+          } catch (err) {
+            console.warn('Could not read file text:', err)
+            content = `[Could not read file ${file.name}]`
+          }
+        }
+
+        return {
+          id: `${file.name}-${Date.now()}-${Math.random()}`,
+          name: file.name,
+          size: file.size,
+          type: file.type || 'text/plain',
+          content,
+        }
+      })
+    )
 
     setAttachments((prev) => [...prev, ...newAttachments])
     if (fileInputRef.current) {
