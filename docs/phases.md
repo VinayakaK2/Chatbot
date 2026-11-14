@@ -736,6 +736,25 @@ Construct relevant model context within a configurable budget while retaining th
 
 Longer sessions can continue with bounded context and traceable source history.
 
+### Phase 6 Implementation & Readiness Summary
+- **Implementation Status:** COMPLETE — READY FOR OPERATOR AUDIT & FREEZE REVIEW (Not yet frozen).
+- **Core Verification Summary:**
+  - `core/context_models.py`: 10 distinct context categories, priority ordering (1–10), `ContextBudgetConfig` with reserved completion headroom ($B_{\text{input}} = M_{\text{ctx}} - M_{\text{out}} - M_{\text{margin}}$), and traceable derived summaries (`is_derived=True`, `source_message_ids`).
+  - `core/context_manager.py`: Stateless, thread-safe context assembler; conservative token estimator ($\lceil (\text{len}/3.3 + 4) \times 1.15 \rceil$); 40/60 head/tail tool bounding with explicit exit-code preservation; secret redaction across all items; deterministic priority sorting with chronological wire re-ordering.
+  - `core/agent_loop.py`: Integrated context assembler before model invocation; graceful handling of `MandatoryContextOverflowError` with `LIMIT_REACHED` event; 100% byte-for-byte immutable history preservation in `AgentExecutionResult.history`.
+  - `core/config.py` & `core/task_service.py`: Exposed `context_window_tokens`, `context_reserve_output_tokens`, `context_safety_margin_tokens`, and `context_max_tool_output_tokens` via settings and diagnostics.
+- **Verification Evidence:**
+  - 460/461 backend tests passing (1 skipped Windows symlink test; 1 warning).
+  - 50/50 frontend tests passing across 10 test files.
+  - Frontend production build passing in 602ms.
+  - Frontend linter passing with 0 errors, 10 compiler notices.
+  - 21 new Phase 6 tests passing (12 unit tests in `tests/test_context_manager.py`, 9 adversarial tests in `tests/test_context_adversarial.py`).
+  - Zero regressions across 439 pre-existing Phase 0–5 tests.
+- **Deliberate Accepted Limitations & Qualifications:**
+  - *Heuristic Token Estimation:* Token counts are estimated using the conservative heuristic $\lceil (\text{len}/3.3 + 4) \times 1.15 \rceil$ with an explicit safety margin rather than model-specific tokenizer weights.
+  - *Volatile Summaries:* Derived summaries currently exist in process memory during task execution; durable summary persistence across server restarts belongs to Phase 7.
+- **Next Step:** Independent Operator Audit & Freeze Review. Do NOT start Phase 7 without explicit operator authorization.
+
 ---
 
 # Phase 7 — Persistent state and session recovery

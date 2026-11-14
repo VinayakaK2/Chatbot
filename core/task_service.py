@@ -12,6 +12,7 @@ from api.schemas.events import RuntimeEvent, RuntimeEventType
 from api.schemas.tasks import TaskCreateRequest, TaskResponse, TaskStatus
 from core.agent_loop import AgentExecutionRequest, AgentLoop, DEFAULT_SYSTEM_PROMPT
 from core.config import Settings, get_settings
+from core.context_models import ContextBudgetConfig
 from core.approval import ApprovalManager, get_global_approval_manager
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
@@ -101,10 +102,17 @@ class TaskService:
         if agent_loop is not None:
             self.agent_loop = agent_loop
         elif self.model_provider is not None:
+            budget_config = ContextBudgetConfig(
+                total_context_tokens=self.settings.context_window_tokens,
+                reserved_output_tokens=self.settings.context_reserve_output_tokens,
+                safety_margin_tokens=self.settings.context_safety_margin_tokens,
+                max_tool_output_tokens=self.settings.context_max_tool_output_tokens,
+            )
             self.agent_loop = AgentLoop(
                 model_provider=self.model_provider,
                 dispatcher=self.tool_dispatcher,
                 registry=self.tool_registry,
+                budget_config=budget_config,
             )
         else:
             self.agent_loop = None

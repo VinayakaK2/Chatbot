@@ -151,3 +151,25 @@ class TestConfiguration:
         object.__setattr__(s, "agent_model_base_url", "not_a_valid_url")
         diag = s.get_sanitized_diagnostics()
         assert diag["agent_model_base_url"] == "[INVALID_URL]"
+
+    def test_context_management_settings_default_and_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify context management settings defaults and custom overrides."""
+        s_default = Settings(_env_file=None)
+        assert s_default.context_window_tokens == 32768
+        assert s_default.context_reserve_output_tokens == 2048
+        assert s_default.context_safety_margin_tokens == 512
+        assert s_default.context_max_tool_output_tokens == 1000
+
+        monkeypatch.setenv("CONTEXT_WINDOW_TOKENS", "16384")
+        monkeypatch.setenv("CONTEXT_RESERVE_OUTPUT_TOKENS", "1024")
+        monkeypatch.setenv("CONTEXT_SAFETY_MARGIN_TOKENS", "256")
+        monkeypatch.setenv("CONTEXT_MAX_TOOL_OUTPUT_TOKENS", "500")
+        s_custom = Settings()
+        assert s_custom.context_window_tokens == 16384
+        assert s_custom.context_reserve_output_tokens == 1024
+        assert s_custom.context_safety_margin_tokens == 256
+        assert s_custom.context_max_tool_output_tokens == 500
+
+        diag = s_custom.get_sanitized_diagnostics()
+        assert diag["context_window_tokens"] == 16384
+        assert diag["context_reserve_output_tokens"] == 1024

@@ -20,6 +20,11 @@ from core.message_models import (
 from core.tool_contracts import ToolResultEnvelope
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
+from core.context_manager import ContextManager
+from core.context_models import (
+    ContextBudgetConfig,
+    MandatoryContextOverflowError,
+)
 from model.contracts import ModelError, ModelProvider, ModelResponse
 
 logger = logging.getLogger("agent_runtime.core.agent_loop")
@@ -250,11 +255,15 @@ class AgentLoop:
         model_provider: ModelProvider,
         dispatcher: Optional[ToolDispatcher] = None,
         registry: Optional[ToolRegistry] = None,
+        context_manager: Optional[ContextManager] = None,
+        budget_config: Optional[ContextBudgetConfig] = None,
     ) -> None:
-        """Initialize the agent loop with model provider, tool dispatcher, and registry."""
+        """Initialize the agent loop with model provider, tool dispatcher, registry, and context manager."""
         self.model_provider = model_provider
         self.registry = registry or get_global_registry()
         self.dispatcher = dispatcher or ToolDispatcher(registry=self.registry)
+        self.context_manager = context_manager or ContextManager(budget_config)
+        self.budget_config = budget_config or self.context_manager.default_budget
 
     def _emit_event(
         self,
@@ -375,14 +384,52 @@ class AgentLoop:
             iterations += 1
             logger.info("AgentLoop turn %d/%d for task %s", iterations, request.max_iterations, request.task_id)
 
-            # 3.4 Dispatch Model Request
+            # 3.4 Assemble Bounded Model Context via ContextManager
+            try:
+                context_result = self.context_manager.assemble_context(
+                    task_id=request.task_id,
+                    user_prompt=request.prompt,
+                    global_instructions=DEFAULT_SYSTEM_PROMPT,
+                    agent_instructions=request.system_prompt,
+                    task_state={
+                        "task_id": request.task_id,
+                        "iteration": iterations,
+                        "max_iterations": request.max_iterations,
+                        "total_tool_calls": total_tool_calls,
+                    },
+                    history=history,
+                    budget_config=self.budget_config,
+                )
+                assembled_messages = context_result.messages
+            except MandatoryContextOverflowError as exc:
+                logger.error("Mandatory context overflow on turn %d: %s", iterations, exc.message)
+                self._emit_event(
+                    request,
+                    RuntimeEventType.TASK_LIMIT_REACHED,
+                    {"limit_type": "mandatory_context_overflow", "error": exc.message},
+                )
+                return AgentExecutionResult(
+                    task_id=request.task_id,
+                    status=TaskStatus.FAILED,
+                    final_response=None,
+                    iterations=iterations,
+                    tool_calls_count=total_tool_calls,
+                    history=history,
+                    model=last_model_id,
+                    usage=accumulated_usage,
+                    error=exc.message,
+                    termination_reason="mandatory_context_overflow",
+                )
+
+            # 3.5 Dispatch Model Request
             self._emit_event(
                 request,
                 RuntimeEventType.MODEL_REQUEST_STARTED,
                 {
                     "iteration": iterations,
-                    "message_count": len(history),
+                    "message_count": len(assembled_messages),
                     "tools_count": len(tool_schemas),
+                    "tokens_used_estimate": context_result.diagnostics.tokens_used_estimate,
                 },
             )
 
@@ -391,7 +438,7 @@ class AgentLoop:
                     prompt=request.prompt,  # fallback for single-prompt adapters
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
-                    messages=history,
+                    messages=assembled_messages,
                     tools=tool_schemas if tool_schemas else None,
                 )
             except ModelError as err:

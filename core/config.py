@@ -126,6 +126,28 @@ class Settings(BaseSettings):
         description="Maximum file edit payload in bytes (1MB)",
     )
 
+    # Context Management Bounds (Phase 6)
+    context_window_tokens: int = Field(
+        default=32768,
+        validation_alias="CONTEXT_WINDOW_TOKENS",
+        description="Total context token window capacity",
+    )
+    context_reserve_output_tokens: int = Field(
+        default=2048,
+        validation_alias="CONTEXT_RESERVE_OUTPUT_TOKENS",
+        description="Tokens reserved for model completion output headroom",
+    )
+    context_safety_margin_tokens: int = Field(
+        default=512,
+        validation_alias="CONTEXT_SAFETY_MARGIN_TOKENS",
+        description="Safety margin buffer tokens to absorb estimation error",
+    )
+    context_max_tool_output_tokens: int = Field(
+        default=1000,
+        validation_alias="CONTEXT_MAX_TOOL_OUTPUT_TOKENS",
+        description="Maximum allowed token budget for individual tool outputs",
+    )
+
     @field_validator("port")
     @classmethod
     def validate_port_range(cls, v: int) -> int:
@@ -240,6 +262,10 @@ class Settings(BaseSettings):
             "agent_tool_timeout_seconds": self.agent_tool_timeout_seconds,
             "agent_task_timeout_seconds": self.agent_task_timeout_seconds,
             "workspace_root": self.workspace_root,
+            "context_window_tokens": self.context_window_tokens,
+            "context_reserve_output_tokens": self.context_reserve_output_tokens,
+            "context_safety_margin_tokens": self.context_safety_margin_tokens,
+            "context_max_tool_output_tokens": self.context_max_tool_output_tokens,
         }
 
 

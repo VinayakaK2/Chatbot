@@ -52,7 +52,7 @@ SAFE_ENV_VARS: Set[str] = {
 SECRET_PATTERNS: List[re.Pattern] = [
     re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{15,}", re.IGNORECASE),
     re.compile(r"(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]{16,}['\"]?", re.IGNORECASE),
-    re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b"),
+    re.compile(r"\bsk-[a-zA-Z0-9_\-]{20,}\b"),
 ]
 
 
