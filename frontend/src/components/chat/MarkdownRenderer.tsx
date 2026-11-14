@@ -207,6 +207,15 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       continue
     }
 
+    // Suppress robotic greeting headers and status banner boilerplate (e.g. "> Status: Online...", "Greetings!")
+    const trimmed = line.trim()
+    if (
+      /^(>?\s*Status:\s*(Online|Ready|Idle|Active|Operational|Available).*)$/i.test(trimmed) ||
+      /^(#{1,6}\s+)?Greetings!?$/i.test(trimmed)
+    ) {
+      continue
+    }
+
     // Table check: pipes
     if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
       flushList(`list-before-table-${i}`)
@@ -233,8 +242,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       flushTable(`table-${i}`)
     }
 
-    // Unordered List (- or *)
-    const ulMatch = line.match(/^(\s*)[-*]\s+(.+)$/)
+    // Unordered List (- or * or •)
+    const ulMatch = line.match(/^(\s*)[-*•]\s+(.+)$/)
     if (ulMatch) {
       if (!inList || listType !== 'ul') {
         flushList(`list-prev-${i}`)

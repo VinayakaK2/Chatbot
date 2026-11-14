@@ -92,4 +92,21 @@ describe('MarkdownRenderer Component', () => {
     expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('Level 3')
     expect(screen.getByRole('heading', { level: 4 }).textContent).toBe('Level 4')
   })
+
+  it('suppresses robotic greeting headers and status banner boilerplate', () => {
+    const noisyMd = '### Greetings!\n> Status: Online and ready to assist.\n\nHello! How can I help you today?'
+    render(<MarkdownRenderer content={noisyMd} />)
+
+    expect(screen.queryByText('Greetings!')).toBeNull()
+    expect(screen.queryByText(/Status: Online/)).toBeNull()
+    expect(screen.getByText('Hello! How can I help you today?')).toBeDefined()
+  })
+
+  it('renders unicode bullet lists (•)', () => {
+    const bulletMd = '• First step\n• Second step'
+    render(<MarkdownRenderer content={bulletMd} />)
+
+    expect(screen.getByText('First step')).toBeDefined()
+    expect(screen.getByText('Second step')).toBeDefined()
+  })
 })
