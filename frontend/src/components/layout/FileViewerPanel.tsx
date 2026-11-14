@@ -4,7 +4,7 @@
  * Git diff inspection, and workspace file exploration.
  */
 
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import type { FileDiff, VerificationRecord } from '../../types/api'
 import { CodeBlock } from '../chat/CodeBlock'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
@@ -90,6 +90,134 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
+
+  // Draggable width state (Antigravity-style split pane)
+  const MIN_PANEL_WIDTH = 360
+  const getInitialWidth = () => {
+    if (typeof window === 'undefined') return 560
+    try {
+      const saved = localStorage.getItem('chatbot_preview_panel_width')
+      if (saved) {
+        const parsed = Number(saved)
+        const maxW = Math.max(window.innerWidth - 360, MIN_PANEL_WIDTH)
+        if (!isNaN(parsed) && parsed >= MIN_PANEL_WIDTH && parsed <= maxW) {
+          return parsed
+        }
+      }
+    } catch {
+      // Ignore localStorage access failures
+    }
+    return Math.min(Math.max(Math.round(window.innerWidth * 0.48), 480), 820)
+  }
+
+  const [panelWidth, setPanelWidth] = useState<number>(getInitialWidth)
+  const [isDragging, setIsDragging] = useState(false)
+  const isDraggingRef = useRef(false)
+
+  // Double-click resets to default width
+  const handleResetWidth = useCallback(() => {
+    const defaultW = Math.min(Math.max(Math.round(window.innerWidth * 0.48), 480), 820)
+    setPanelWidth(defaultW)
+    try {
+      localStorage.setItem('chatbot_preview_panel_width', String(defaultW))
+    } catch {}
+  }, [])
+
+  // Start drag on mouse down
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+    isDraggingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  // Start drag on touch start
+  const handleTouchStart = useCallback(() => {
+    setIsDragging(true)
+    isDraggingRef.current = true
+  }, [])
+
+  // Keyboard accessibility for resizing divider
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      setPanelWidth((prev) => {
+        const next = Math.min(prev + 24, window.innerWidth - 360)
+        try { localStorage.setItem('chatbot_preview_panel_width', String(next)) } catch {}
+        return next
+      })
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      setPanelWidth((prev) => {
+        const next = Math.max(prev - 24, MIN_PANEL_WIDTH)
+        try { localStorage.setItem('chatbot_preview_panel_width', String(next)) } catch {}
+        return next
+      })
+    } else if (e.key === 'Enter') {
+      handleResetWidth()
+    }
+  }, [handleResetWidth])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const maxW = Math.max(window.innerWidth - 360, MIN_PANEL_WIDTH)
+      const newWidth = window.innerWidth - e.clientX
+      const clamped = Math.min(Math.max(newWidth, MIN_PANEL_WIDTH), maxW)
+      setPanelWidth(clamped)
+    }
+
+    const handleMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false
+        setIsDragging(false)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setPanelWidth((curr) => {
+          try {
+            localStorage.setItem('chatbot_preview_panel_width', String(curr))
+          } catch {}
+          return curr
+        })
+      }
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isDraggingRef.current || !e.touches[0]) return
+      const maxW = Math.max(window.innerWidth - 360, MIN_PANEL_WIDTH)
+      const newWidth = window.innerWidth - e.touches[0].clientX
+      const clamped = Math.min(Math.max(newWidth, MIN_PANEL_WIDTH), maxW)
+      setPanelWidth(clamped)
+    }
+
+    const handleTouchEnd = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false
+        setIsDragging(false)
+        setPanelWidth((curr) => {
+          try {
+            localStorage.setItem('chatbot_preview_panel_width', String(curr))
+          } catch {}
+          return curr
+        })
+      }
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('touchmove', handleTouchMove)
+    window.addEventListener('touchend', handleTouchEnd)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleTouchEnd)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [])
 
   // Sync external tab request
   useEffect(() => {
@@ -290,10 +418,31 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
 
   return (
     <aside
-      className={`file-viewer-split-pane ${isFullscreen ? 'is-fullscreen' : ''}`}
+      className={`file-viewer-split-pane ${isFullscreen ? 'is-fullscreen' : ''} ${
+        isDragging ? 'is-resizing' : ''
+      }`}
+      style={!isFullscreen ? { width: `${panelWidth}px` } : undefined}
       role="complementary"
       aria-label="Files and Git Diff Viewer Panel"
     >
+      {/* Draggable Divider Handle (Antigravity-style) */}
+      {!isFullscreen && (
+        <div
+          className={`panel-resize-handle ${isDragging ? 'is-dragging' : ''}`}
+          onMouseDown={handleMouseDown}
+          onTouchStart={handleTouchStart}
+          onDoubleClick={handleResetWidth}
+          onKeyDown={handleKeyDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel divider"
+          aria-valuenow={panelWidth}
+          aria-valuemin={MIN_PANEL_WIDTH}
+          aria-valuemax={typeof window !== 'undefined' ? window.innerWidth - 360 : 1200}
+          tabIndex={0}
+          title="Drag to resize panel (Double-click to reset, Left/Right arrow keys)"
+        />
+      )}
       {/* 1. Antigravity-Style Tabs Bar */}
       <div className="file-viewer-tabs-bar">
         <div className="file-viewer-tabs-scroll">
@@ -383,7 +532,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           </div>
         </div>
 
-        {/* Top Right Panel Controls (Fullscreen) */}
+        {/* Top Right Panel Controls (Fullscreen & Toggle Sidebar) */}
         <div className="file-viewer-top-actions">
           <button
             type="button"
@@ -393,6 +542,16 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             aria-label="Toggle Fullscreen"
           >
             <IconMaximize size={14} />
+          </button>
+
+          <button
+            type="button"
+            className="panel-tool-btn panel-tool-toggle-btn"
+            onClick={onClose}
+            title="Toggle Side Panel (Close)"
+            aria-label="Toggle Side Panel"
+          >
+            <IconSidebar size={16} />
           </button>
         </div>
       </div>
@@ -515,17 +674,6 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             aria-label="Reload file"
           >
             <IconRefresh size={13} />
-          </button>
-
-          {/* Breadcrumb toggle sidebar button */}
-          <button
-            type="button"
-            className="breadcrumb-icon-btn is-active"
-            onClick={onClose}
-            title="Toggle Side Panel (Close)"
-            aria-label="Toggle Side Panel"
-          >
-            <IconSidebar size={14} />
           </button>
         </div>
       </div>

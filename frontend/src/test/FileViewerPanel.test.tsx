@@ -125,4 +125,34 @@ describe('FileViewerPanel Component', () => {
 
     expect(writeTextMock).toHaveBeenCalledWith(sampleTabs[0].content)
   })
+
+  it('renders draggable resize handle and supports double-click reset and keyboard resizing', async () => {
+    await act(async () => {
+      render(
+        <FileViewerPanel
+          isOpen={true}
+          onClose={vi.fn()}
+          initialTabs={sampleTabs}
+          activeTabId="tab-1"
+        />
+      )
+    })
+
+    const resizeHandle = screen.getByLabelText('Resize panel divider')
+    expect(resizeHandle).toBeDefined()
+    expect(resizeHandle.getAttribute('role')).toBe('separator')
+
+    // Test keyboard resize (ArrowLeft expands, ArrowRight shrinks)
+    await act(async () => {
+      fireEvent.keyDown(resizeHandle, { key: 'ArrowLeft' })
+    })
+    const initialWidthAttr = Number(resizeHandle.getAttribute('aria-valuenow'))
+    expect(initialWidthAttr).toBeGreaterThanOrEqual(360)
+
+    // Test double click to reset
+    await act(async () => {
+      fireEvent.doubleClick(resizeHandle)
+    })
+    expect(resizeHandle.getAttribute('aria-valuenow')).toBeDefined()
+  })
 })

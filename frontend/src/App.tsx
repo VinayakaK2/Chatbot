@@ -690,7 +690,7 @@ export const App: React.FC = () => {
                   title="Open Side Panel (Files & Terminal)"
                   aria-label="Toggle Side Panel"
                 >
-                  <IconSidebar size={18} />
+                  <IconSidebar size={16} />
                 </button>
               )}
             </div>
