@@ -283,4 +283,70 @@ export const apiClient = {
       throw new Error('Rejection request failed.')
     }
   },
+
+  /**
+   * Fetch bounded workspace file content and language detection for preview.
+   */
+  async getFileContent(path: string): Promise<FileContentResponse> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/files/content?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as FileContentResponse
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error(`Failed to load file content for '${path}'.`)
+    }
+  },
+
+  /**
+   * Retrieve structured git diff and repository file change metrics.
+   */
+  async getGitDiff(): Promise<GitDiffResponse> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/files/diff`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as GitDiffResponse
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Failed to retrieve git diff.')
+    }
+  },
+
+  /**
+   * List available markdown reports and workspace documents for quick tab opening.
+   */
+  async getAvailableDocuments(): Promise<WorkspaceFileItem[]> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/files/list`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as WorkspaceFileItem[]
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      return []
+    }
+  },
 }

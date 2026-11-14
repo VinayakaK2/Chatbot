@@ -185,6 +185,39 @@ export interface ArtifactRecord {
   timestamp: string
 }
 
+export interface FileContentResponse {
+  path: string
+  name: string
+  content: string
+  size_bytes: number
+  language: string
+  is_markdown: boolean
+}
+
+export interface FileDiffItem {
+  path: string
+  status: string
+  insertions: number
+  deletions: number
+  patch: string
+}
+
+export interface GitDiffResponse {
+  files_changed_count: number
+  insertions: number
+  deletions: number
+  files: FileDiffItem[]
+  raw_diff: string
+}
+
+export interface WorkspaceFileItem {
+  path: string
+  name: string
+  is_dir: boolean
+  is_markdown: boolean
+  size_bytes: number
+}
+
 export interface PendingApproval {
   call_id: string
   tool_name: string

@@ -45,7 +45,14 @@ class DefaultPermissionPolicy:
         allowed_tool_names: Optional[Set[str]] = None,
         denied_tool_names: Optional[Set[str]] = None,
     ) -> None:
-        """Initialize permission policy with explicit category and tool name boundaries."""
+        """Initialize permission policy with explicit category and tool name boundaries.
+
+        ARCH-01 Policy Scope:
+        In Phase 4, WORKSPACE_WRITE is permitted by default exclusively for contained
+        workspace mutations (write_file, edit_file) operating inside canonical workspace
+        boundaries. COMMAND_EXECUTION and DESTRUCTIVE remain denied by default.
+        Phase 5 introduces interactive per-tool approval prompts before execution.
+        """
         # By default in Phase 4, allow READ_ONLY, SYSTEM_PROBE, and WORKSPACE_WRITE
         self.allowed_categories = allowed_categories or {
             ToolRiskCategory.READ_ONLY,
@@ -236,6 +243,8 @@ class ToolDispatcher:
             truncated = False
             if isinstance(output, str) and len(output) > self.max_output_chars:
                 output = output[: self.max_output_chars] + f"\n... [Output truncated to {self.max_output_chars} chars]"
+                truncated = True
+            elif isinstance(output, dict) and output.get("truncated") is True:
                 truncated = True
 
             logger.info("Executed tool '%s' successfully in %.2fms", tool_name, duration_ms)

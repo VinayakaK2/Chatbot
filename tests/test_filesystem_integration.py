@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import pytest
 
+from api.schemas.events import RuntimeEvent, RuntimeEventType
 from core.agent_loop import AgentExecutionRequest, AgentLoop
 from core.message_models import AgentMessageRole, ToolCallRecord, ToolCallStatus
+from core.task_service import TaskService
 from core.tool_contracts import (
     ToolDefinition,
     ToolResultEnvelope,
@@ -319,3 +321,125 @@ class TestAgentLoopFilesystemEndToEnd:
         assert "return 'v2'" in target_file.read_text(encoding="utf-8")
         assert tool_result_messages[0].tool_call_id == "call_turn1_list"
         assert tool_result_messages[1].tool_call_id == "call_turn2_edit"
+
+    @pytest.mark.asyncio
+    async def test_event_payload_sanitization_sec01(self, test_workspace: WorkspaceContext) -> None:
+        """SEC-01 Invariant: Progress events redact sensitive payloads while internal history retains full content."""
+        registry = ToolRegistry()
+        register_workspace_tools(registry=registry, workspace=test_workspace)
+        dispatcher = ToolDispatcher(registry=registry)
+
+        secret_payload = "API_KEY=super_secret_token_12345"
+        turn1_resp = ModelResponse(
+            text="Writing config",
+            finish_reason="tool_calls",
+            model="test-model",
+            tool_calls=[
+                {
+                    "id": "call_write_sec",
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": f'{{"path": "config.env", "content": "{secret_payload}"}}',
+                    },
+                }
+            ],
+        )
+        turn2_resp = ModelResponse(
+            text="Reading config",
+            finish_reason="tool_calls",
+            model="test-model",
+            tool_calls=[
+                {
+                    "id": "call_read_sec",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "config.env"}',
+                    },
+                }
+            ],
+        )
+        turn3_resp = ModelResponse(
+            text="Done configuring secrets.",
+            finish_reason="stop",
+            model="test-model",
+            tool_calls=None,
+        )
+
+        provider = MockTurnModelProvider([turn1_resp, turn2_resp, turn3_resp])
+        agent_loop = AgentLoop(model_provider=provider, dispatcher=dispatcher, registry=registry)
+
+        events: List[RuntimeEvent] = []
+        req = AgentExecutionRequest(
+            task_id="task_sec_events",
+            prompt="Configure secrets and verify",
+            event_sink=lambda ev: events.append(ev),
+        )
+
+        result = await agent_loop.run(req)
+        assert result.status.value == "completed"
+
+        # Check TOOL_REQUESTED for write_file
+        req_events = [e for e in events if e.event_type == RuntimeEventType.TOOL_REQUESTED]
+        assert len(req_events) == 2
+        write_req_payload = req_events[0].payload
+        assert write_req_payload["tool_name"] == "write_file"
+        assert write_req_payload["file_path"] == "config.env"
+        assert write_req_payload["risk_category"] == "workspace_write"
+        assert write_req_payload["operation"] == "Write config.env"
+        # Secret must NOT be in event arguments
+        assert secret_payload not in str(write_req_payload["arguments"])
+        assert write_req_payload["arguments"]["content"] == f"<redacted: {len(secret_payload.encode('utf-8'))} bytes>"
+
+        # Check TOOL_COMPLETED for read_file
+        comp_events = [e for e in events if e.event_type == RuntimeEventType.TOOL_COMPLETED]
+        assert len(comp_events) == 2
+        read_comp_payload = comp_events[1].payload
+        assert read_comp_payload["tool_name"] == "read_file"
+        # Secret content must be redacted in event payload
+        assert secret_payload not in str(read_comp_payload["output"])
+        assert read_comp_payload["output"]["content_redacted"] is True
+        assert "<redacted:" in read_comp_payload["output"]["content"]
+
+        # Crucial Invariant: The internal agent conversation history MUST retain the actual unredacted secret!
+        read_tool_msgs = [
+            m for m in result.history
+            if m.role == AgentMessageRole.TOOL and m.tool_call_id == "call_read_sec"
+        ]
+        assert len(read_tool_msgs) == 1
+        assert secret_payload in read_tool_msgs[0].content
+
+    @pytest.mark.asyncio
+    async def test_dispatcher_truncation_propagation_arch03(self, integrated_dispatcher: ToolDispatcher) -> None:
+        """ARCH-03 Invariant: Dictionary tool outputs with truncated=True propagate to metadata['truncated']."""
+        # Read a file with max_bytes=10 on a file that has more than 10 bytes
+        result = await integrated_dispatcher.dispatch(
+            tool_name="read_file",
+            arguments='{"path": "src/app.py", "max_bytes": 10}',
+            call_id="call_trunc_prop",
+        )
+        assert result.success is True
+        assert isinstance(result.output, dict)
+        assert result.output.get("truncated") is True
+        # Envelope metadata must also reflect truncated=True
+        assert result.metadata.get("truncated") is True
+
+    def test_task_service_auto_register_control_arch02(self, test_workspace: WorkspaceContext) -> None:
+        """ARCH-02 Invariant: auto_register_tools=False preserves caller-supplied registry."""
+        custom_registry = ToolRegistry()
+        service_no_auto = TaskService(
+            workspace_context=test_workspace,
+            tool_registry=custom_registry,
+            auto_register_tools=False,
+        )
+        assert custom_registry.has("read_file") is False
+        assert len(custom_registry) == 0
+
+        service_auto = TaskService(
+            workspace_context=test_workspace,
+            tool_registry=custom_registry,
+            auto_register_tools=True,
+        )
+        assert custom_registry.has("read_file") is True
+        assert len(custom_registry) == 8

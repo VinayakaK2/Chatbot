@@ -53,6 +53,7 @@ class TaskService:
         tool_dispatcher: Optional[ToolDispatcher] = None,
         agent_loop: Optional[AgentLoop] = None,
         workspace_context: Optional[WorkspaceContext] = None,
+        auto_register_tools: bool = True,
     ) -> None:
         """Initialize the task service with model provider, registry, dispatcher, and agent loop."""
         self.settings = settings or get_settings()
@@ -67,8 +68,8 @@ class TaskService:
             else WorkspaceContext(root_path=os.getcwd())
         )
 
-        # Register standard Phase 4 workspace tools into registry if not present
-        if not self.tool_registry.has("read_file"):
+        # Register standard Phase 4 workspace tools into registry if enabled and not already present
+        if auto_register_tools and not self.tool_registry.has("read_file"):
             register_workspace_tools(registry=self.tool_registry, workspace=self.workspace_context)
 
         if model_provider is not None:

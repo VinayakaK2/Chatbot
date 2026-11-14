@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from core.tool_contracts import ToolError
@@ -168,7 +169,19 @@ class WorkspaceContext:
         self.max_write_bytes = max_write_bytes
         self.max_edit_bytes = max_edit_bytes
 
+        # Thread synchronization locks per canonical file path (CONC-01, CONC-02)
+        self._path_locks: Dict[str, threading.RLock] = {}
+        self._path_locks_mutex: threading.Lock = threading.Lock()
+
         logger.info("Initialized WorkspaceContext at canonical root: %s", self._root_path)
+
+    def _get_path_lock(self, canonical_target: Path) -> threading.RLock:
+        """Retrieve or initialize an isolated re-entrant lock for a canonical file path."""
+        key = str(canonical_target)
+        with self._path_locks_mutex:
+            if key not in self._path_locks:
+                self._path_locks[key] = threading.RLock()
+            return self._path_locks[key]
 
     @property
     def root_path(self) -> Path:
@@ -256,7 +269,7 @@ class WorkspaceContext:
         except ValueError:
             # Different drives on Windows
             raise PathOutsideWorkspaceError(
-                f"Path '{path_str}' is on a different drive than workspace root '{self._root_path}'."
+                f"Path '{path_str}' is on a different drive than the workspace root."
             )
 
         if common != str(self._root_path):
@@ -322,7 +335,7 @@ class WorkspaceContext:
             raise WorkspaceIOError(f"Failed to read file '{self.get_relative_path(target)}': {str(exc)}")
 
         # Multi-encoding decode cascade
-        candidate_encodings = [encoding, "utf-8-sig", "utf-8", "latin-1"]
+        candidate_encodings = [encoding, "utf-8-sig", "utf-8"]
         decoded_text: Optional[str] = None
         used_encoding: Optional[str] = None
 
@@ -333,6 +346,24 @@ class WorkspaceContext:
                 break
             except (UnicodeDecodeError, LookupError):
                 continue
+
+        # If standard UTF-8 encodings fail, verify raw_bytes before attempting universal latin-1 fallback (SEC-03)
+        if decoded_text is None:
+            if b"\x00" in raw_bytes:
+                raise BinaryFileError(
+                    f"File '{self.get_relative_path(target)}' contains null bytes and cannot be read as text."
+                )
+            text_characters = bytes(range(32, 127)) + b"\n\r\t\b"
+            non_text = raw_bytes.translate(None, text_characters)
+            if len(raw_bytes) > 0 and len(non_text) / len(raw_bytes) > 0.30:
+                raise BinaryFileError(
+                    f"File '{self.get_relative_path(target)}' appears to be binary and cannot be read as text."
+                )
+            try:
+                decoded_text = raw_bytes.decode("latin-1")
+                used_encoding = "latin-1"
+            except (UnicodeDecodeError, LookupError):
+                pass
 
         if decoded_text is None:
             raise WorkspaceError(
@@ -393,35 +424,41 @@ class WorkspaceContext:
         try:
             parent_common = os.path.commonpath([str(self._root_path), str(target_dir.resolve())])
             if parent_common != str(self._root_path):
-                raise PathOutsideWorkspaceError(f"Parent directory escapes workspace: {target_dir}")
+                raise PathOutsideWorkspaceError("Parent directory resolves outside workspace boundary.")
         except ValueError:
-            raise PathOutsideWorkspaceError(f"Parent directory on different drive: {target_dir}")
+            raise PathOutsideWorkspaceError("Parent directory is on a different drive than the workspace root.")
 
-        # Write to temp file in same directory for atomic os.replace support
-        temp_fd, temp_path_str = tempfile.mkstemp(
-            prefix=".tmp_write_",
-            dir=str(target_dir),
-            text=False,
-        )
-        temp_path = Path(temp_path_str)
+        # Serialize writes per canonical file target (CONC-01, CONC-02)
+        lock = self._get_path_lock(self.resolve_path(self.get_relative_path(target)))
+        with lock:
+            # Write to temp file in same directory for atomic os.replace support
+            temp_fd, temp_path_str = tempfile.mkstemp(
+                prefix=".tmp_write_",
+                dir=str(target_dir),
+                text=False,
+            )
+            temp_path = Path(temp_path_str)
 
-        try:
-            with os.fdopen(temp_fd, "wb") as f:
-                f.write(encoded_bytes)
-                f.flush()
-                os.fsync(f.fileno())
+            try:
+                with os.fdopen(temp_fd, "wb") as f:
+                    f.write(encoded_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
 
-            # Atomic swap
-            os.replace(temp_path, target)
-            lines_count = len(content.splitlines())
-            return len(encoded_bytes), lines_count
-        except OSError as exc:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError:
-                    pass
-            raise WorkspaceIOError(f"Atomic write to '{self.get_relative_path(target)}' failed: {str(exc)}")
+                # Atomic swap
+                os.replace(temp_path, target)
+                lines_count = len(content.splitlines())
+                return len(encoded_bytes), lines_count
+            except OSError as exc:
+                sanitized_exc = str(exc).replace(str(self._root_path), "<workspace>")
+                raise WorkspaceIOError(f"Atomic write to '{self.get_relative_path(target)}' failed: {sanitized_exc}")
+            finally:
+                # Guarantee temp file cleanup on any error or cancellation (CONC-03)
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
 
     def edit_file_text(
         self,
@@ -435,42 +472,45 @@ class WorkspaceContext:
         if not old_str:
             raise InvalidPathError("old_str cannot be empty.")
 
-        current_content, _, detected_enc = self.read_text_bounded(target, encoding=encoding)
+        # Serialize entire Read -> Conflict Check -> Replace -> Write critical section (CONC-01)
+        lock = self._get_path_lock(self.resolve_path(self.get_relative_path(target)))
+        with lock:
+            current_content, _, detected_enc = self.read_text_bounded(target, encoding=encoding)
 
-        # Check for conflict: old_str must exist in the file
-        occurrences = current_content.count(old_str)
-        if occurrences == 0:
-            raise EditConflictError(
-                f"old_str was not found in '{self.get_relative_path(target)}'. The file may have changed."
+            # Check for conflict: old_str must exist in the file
+            occurrences = current_content.count(old_str)
+            if occurrences == 0:
+                raise EditConflictError(
+                    f"old_str was not found in '{self.get_relative_path(target)}'. The file may have changed."
+                )
+            if not replace_all and occurrences > 1:
+                raise EditConflictError(
+                    f"old_str matched {occurrences} occurrences in '{self.get_relative_path(target)}'. Specify replace_all=True or a more unique string."
+                )
+
+            # Perform replacement
+            if replace_all:
+                updated_content = current_content.replace(old_str, new_str)
+                replacements_made = occurrences
+            else:
+                updated_content = current_content.replace(old_str, new_str, 1)
+                replacements_made = 1
+
+            # Generate unified diff for auditability and UI rendering
+            old_lines = current_content.splitlines(keepends=True)
+            new_lines = updated_content.splitlines(keepends=True)
+            rel_path = self.get_relative_path(target)
+            diff_lines = list(
+                difflib.unified_diff(
+                    old_lines,
+                    new_lines,
+                    fromfile=f"a/{rel_path}",
+                    tofile=f"b/{rel_path}",
+                    lineterm="",
+                )
             )
-        if not replace_all and occurrences > 1:
-            raise EditConflictError(
-                f"old_str matched {occurrences} occurrences in '{self.get_relative_path(target)}'. Specify replace_all=True or a more unique string."
-            )
+            unified_diff = "\n".join(diff_lines)
 
-        # Perform replacement
-        if replace_all:
-            updated_content = current_content.replace(old_str, new_str)
-            replacements_made = occurrences
-        else:
-            updated_content = current_content.replace(old_str, new_str, 1)
-            replacements_made = 1
-
-        # Generate unified diff for auditability and UI rendering
-        old_lines = current_content.splitlines(keepends=True)
-        new_lines = updated_content.splitlines(keepends=True)
-        rel_path = self.get_relative_path(target)
-        diff_lines = list(
-            difflib.unified_diff(
-                old_lines,
-                new_lines,
-                fromfile=f"a/{rel_path}",
-                tofile=f"b/{rel_path}",
-                lineterm="",
-            )
-        )
-        unified_diff = "\n".join(diff_lines)
-
-        # Atomically write updated content
-        self.atomic_write_text(target, updated_content, encoding=detected_enc)
-        return unified_diff, replacements_made
+            # Atomically write updated content under the same file lock
+            self.atomic_write_text(target, updated_content, encoding=detected_enc)
+            return unified_diff, replacements_made

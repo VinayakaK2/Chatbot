@@ -158,6 +158,90 @@ class AgentExecutionResult(BaseModel):
     termination_reason: str
 
 
+def _sanitize_tool_requested_payload(tc_id: str, tool_name: str, raw_args_str: str) -> Dict[str, Any]:
+    """Sanitize client-facing TOOL_REQUESTED event payload to prevent exposing sensitive write content."""
+    file_path = None
+    operation = f"Execute {tool_name}"
+    risk_category = "read_only"
+
+    parsed_args = {}
+    if raw_args_str:
+        try:
+            parsed_args = json.loads(raw_args_str)
+        except Exception:
+            parsed_args = {"raw": raw_args_str[:200]}
+
+    sanitized_args: Dict[str, Any] = {}
+    if isinstance(parsed_args, dict):
+        file_path = parsed_args.get("path")
+        for k, v in parsed_args.items():
+            if k in ("content", "new_str", "text", "body") and isinstance(v, str):
+                byte_len = len(v.encode("utf-8", errors="replace"))
+                sanitized_args[k] = f"<redacted: {byte_len} bytes>"
+                sanitized_args[f"{k}_bytes"] = byte_len
+            elif k in ("old_str",) and isinstance(v, str):
+                if len(v) > 200:
+                    byte_len = len(v.encode("utf-8", errors="replace"))
+                    sanitized_args[k] = f"<redacted: {byte_len} bytes>"
+                else:
+                    sanitized_args[k] = v
+            else:
+                sanitized_args[k] = v
+    else:
+        sanitized_args = {"raw": str(parsed_args)[:200]}
+
+    if tool_name in ("write_file", "edit_file"):
+        risk_category = "workspace_write"
+        operation = f"Write {file_path}" if file_path else f"Execute {tool_name}"
+    elif tool_name in ("read_file", "read_file_range", "list_directory", "search_files", "find_files"):
+        risk_category = "read_only"
+        operation = f"Read {file_path}" if file_path else f"Execute {tool_name}"
+
+    payload: Dict[str, Any] = {
+        "call_id": tc_id,
+        "tool_name": tool_name,
+        "operation": operation,
+        "risk_category": risk_category,
+        "arguments": sanitized_args,
+    }
+    if file_path:
+        payload["file_path"] = str(file_path)
+    return payload
+
+
+def _sanitize_tool_completed_payload(tc_id: str, tool_name: str, envelope: ToolResultEnvelope) -> Dict[str, Any]:
+    """Sanitize client-facing TOOL_COMPLETED event payload to prevent exposing sensitive read file contents."""
+    output = envelope.output
+    sanitized_output = output
+    diff_payload = None
+
+    if isinstance(output, dict):
+        sanitized_dict = dict(output)
+        if "content" in sanitized_dict and isinstance(sanitized_dict["content"], str):
+            content_str = sanitized_dict["content"]
+            byte_len = len(content_str.encode("utf-8", errors="replace"))
+            sanitized_dict["content"] = f"<redacted: {byte_len} bytes>"
+            sanitized_dict["content_redacted"] = True
+            sanitized_dict["bytes_read"] = byte_len
+        if "diff" in sanitized_dict:
+            diff_payload = sanitized_dict.get("diff")
+        sanitized_output = sanitized_dict
+    elif isinstance(output, str):
+        if len(output) > 2000:
+            sanitized_output = output[:2000] + f"\n... [Truncated {len(output) - 2000} chars for progress stream]"
+
+    payload: Dict[str, Any] = {
+        "call_id": tc_id,
+        "tool_name": tool_name,
+        "output": sanitized_output,
+        "metadata": envelope.metadata,
+        "success": envelope.success,
+    }
+    if diff_payload is not None:
+        payload["diff"] = diff_payload
+    return payload
+
+
 class AgentLoop:
     """Reactive agent execution engine coordinating model reasoning, tool dispatch, and state."""
 
@@ -475,11 +559,7 @@ class AgentLoop:
                 self._emit_event(
                     request,
                     RuntimeEventType.TOOL_REQUESTED,
-                    {
-                        "call_id": tc.id,
-                        "tool_name": tc.name,
-                        "arguments": tc.raw_arguments,
-                    },
+                    _sanitize_tool_requested_payload(tc.id, tc.name, tc.raw_arguments),
                 )
 
                 self._emit_event(
@@ -498,17 +578,12 @@ class AgentLoop:
 
                 total_tool_calls += 1
 
-                # Emit specific completion or failure event
+                # Emit specific completion or failure event (with sanitized payload for client SSE stream)
                 if envelope.success:
                     self._emit_event(
                         request,
                         RuntimeEventType.TOOL_COMPLETED,
-                        {
-                            "call_id": tc.id,
-                            "tool_name": tc.name,
-                            "output": envelope.output,
-                            "metadata": envelope.metadata,
-                        },
+                        _sanitize_tool_completed_payload(tc.id, tc.name, envelope),
                     )
                 else:
                     self._emit_event(

@@ -2,8 +2,12 @@
 
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from core.workspace import (
@@ -120,6 +124,40 @@ class TestWorkspaceSecurityTraversal:
         with pytest.raises(PathOutsideWorkspaceError):
             temp_workspace.resolve_path("leak_link.txt")
 
+    def test_reparse_point_junction_escape_blocked(self, temp_workspace: WorkspaceContext, tmp_path: Path) -> None:
+        """Directory junction or reparse point pointing outside workspace root is detected and blocked."""
+        external_dir = tmp_path / "external_vault"
+        external_dir.mkdir(parents=True, exist_ok=True)
+        secret_file = external_dir / "secret.txt"
+        secret_file.write_text("SUPER_SECRET_PAYLOAD", encoding="utf-8")
+
+        junction_link = temp_workspace.root_path / "external_junction"
+        if sys.platform == "win32":
+            res = subprocess.run(
+                ["cmd.exe", "/c", "mklink", "/J", str(junction_link), str(external_dir)],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode != 0:
+                pytest.skip(f"mklink /J failed: {res.stderr}")
+        else:
+            try:
+                os.symlink(str(external_dir), str(junction_link), target_is_directory=True)
+            except OSError:
+                pytest.skip("Symlink requires permissions")
+
+        with pytest.raises(PathOutsideWorkspaceError):
+            temp_workspace.resolve_path("external_junction/secret.txt", must_exist=True)
+
+    def test_host_path_sanitization_in_errors(self, temp_workspace: WorkspaceContext) -> None:
+        """Exceptions must not disclose full host workspace root or host drive structures."""
+        # Outside workspace error
+        with pytest.raises(PathOutsideWorkspaceError) as exc_info:
+            temp_workspace.resolve_path("../../etc/passwd")
+        err_msg = str(exc_info.value)
+        assert str(temp_workspace.root_path) not in err_msg
+        assert "<workspace>" in err_msg or "outside workspace boundary" in err_msg
+
 
 class TestWorkspaceFileOperations:
     """Unit tests for bounded file reading, metadata inspection, and atomic writes."""
@@ -205,3 +243,89 @@ class TestWorkspaceFileOperations:
         # Multiple matches with replace_all works
         diff, count = temp_workspace.edit_file_text(target_path, old_str="val = 10", new_str="val = 20", replace_all=True)
         assert count == 2
+
+    def test_binary_misclassification_defense_large_buffer(self, temp_workspace: WorkspaceContext) -> None:
+        """A file with >4096 bytes of ASCII text followed by binary bytes must be rejected as binary, not decoded as Latin-1."""
+        target_path = temp_workspace.resolve_path("large_binary_payload.bin")
+        payload = (b"HEADER_LINE_A\n" * 400) + (b"\x00\x01\x02\x03\xff\xfe" * 50)
+        assert len(payload) > 5000
+
+        with open(target_path, "wb") as f:
+            f.write(payload)
+
+        with pytest.raises(BinaryFileError):
+            temp_workspace.read_text_bounded(target_path)
+
+    def test_concurrent_edits_conflict_detection(self, temp_workspace: WorkspaceContext) -> None:
+        """Concurrent edits to the same file serialize via path lock; exactly one succeeds and others raise EditConflictError."""
+        target_path = temp_workspace.resolve_path("counter.py")
+        temp_workspace.atomic_write_text(target_path, "COUNTER = 0\n")
+
+        successes = 0
+        conflicts = 0
+        errors = []
+
+        def worker(idx: int) -> None:
+            nonlocal successes, conflicts
+            try:
+                _, count = temp_workspace.edit_file_text(
+                    target_path,
+                    old_str="COUNTER = 0",
+                    new_str=f"COUNTER = {idx + 1}",
+                )
+                if count == 1:
+                    successes += 1
+            except EditConflictError:
+                conflicts += 1
+            except Exception as e:
+                errors.append(e)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(worker, i) for i in range(10)]
+            for f in futures:
+                f.result()
+
+        assert len(errors) == 0
+        assert successes == 1
+        assert conflicts == 9
+
+        final_content, _, _ = temp_workspace.read_text_bounded(target_path)
+        assert "COUNTER = 0" not in final_content
+        assert final_content.startswith("COUNTER = ")
+
+    def test_concurrent_writes_no_handle_contention(self, temp_workspace: WorkspaceContext) -> None:
+        """Concurrent writes to the exact same file must not fail with [WinError 5] Access is denied."""
+        target_path = temp_workspace.resolve_path("shared_write.txt")
+        errors = []
+
+        def write_worker(idx: int) -> None:
+            try:
+                temp_workspace.atomic_write_text(target_path, f"Thread {idx} content\n")
+            except Exception as e:
+                errors.append(e)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(write_worker, i) for i in range(10)]
+            for f in futures:
+                f.result()
+
+        assert len(errors) == 0
+        final_text, _, _ = temp_workspace.read_text_bounded(target_path)
+        assert final_text.startswith("Thread ")
+
+    def test_temp_file_cleanup_on_interruption(self, temp_workspace: WorkspaceContext, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Temporary files created during atomic writes must be cleaned up if an interruption occurs."""
+        target_path = temp_workspace.resolve_path("interrupted.txt")
+
+        # Simulate interruption during os.replace
+        def mock_replace(src: str, dst: str) -> None:
+            raise KeyboardInterrupt("Simulated task cancellation / interruption")
+
+        monkeypatch.setattr(os, "replace", mock_replace)
+
+        with pytest.raises(KeyboardInterrupt):
+            temp_workspace.atomic_write_text(target_path, "Some content")
+
+        # Verify no .tmp_write_* files left in directory
+        tmp_files = list(temp_workspace.root_path.glob(".tmp_write_*"))
+        assert len(tmp_files) == 0
