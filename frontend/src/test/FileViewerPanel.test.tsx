@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { FileViewerPanel, type FileViewerTab } from '../components/layout/FileViewerPanel'
 
 describe('FileViewerPanel Component', () => {
@@ -102,20 +102,26 @@ describe('FileViewerPanel Component', () => {
       },
     })
 
-    render(
-      <FileViewerPanel
-        isOpen={true}
-        onClose={vi.fn()}
-        initialTabs={sampleTabs}
-        activeTabId="tab-1"
-      />
-    )
+    await act(async () => {
+      render(
+        <FileViewerPanel
+          isOpen={true}
+          onClose={vi.fn()}
+          initialTabs={sampleTabs}
+          activeTabId="tab-1"
+        />
+      )
+    })
 
     const moreBtn = screen.getByLabelText('More Options')
-    fireEvent.click(moreBtn)
+    await act(async () => {
+      fireEvent.click(moreBtn)
+    })
 
     const copyBtn = screen.getByText('Copy File Content')
-    fireEvent.click(copyBtn)
+    await act(async () => {
+      fireEvent.click(copyBtn)
+    })
 
     expect(writeTextMock).toHaveBeenCalledWith(sampleTabs[0].content)
   })
