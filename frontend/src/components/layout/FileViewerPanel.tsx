@@ -22,6 +22,7 @@ import {
   IconMoreVertical,
   IconPlus,
   IconRefresh,
+  IconSidebar,
   IconSplit,
   IconTerminal,
   IconX,
@@ -85,9 +86,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   const [copied, setCopied] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false)
   const [availableDocs, setAvailableDocs] = useState<{ path: string; name: string }[]>([])
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
 
   // Sync external tab request
   useEffect(() => {
@@ -186,18 +189,21 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
       .finally(() => setIsLoadingFile(false))
   }
 
-  // Close picker on click outside
+  // Close picker and more menu on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setIsPickerOpen(false)
       }
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setIsMoreMenuOpen(false)
+      }
     }
-    if (isPickerOpen) {
+    if (isPickerOpen || isMoreMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside)
     }
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isPickerOpen])
+  }, [isPickerOpen, isMoreMenuOpen])
 
   if (!isOpen) return null
 
@@ -378,7 +384,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           </div>
         </div>
 
-        {/* Top Right Panel Controls (Fullscreen, Split/Popout, Close) */}
+        {/* Top Right Panel Controls (Fullscreen and Toggle Sidebar) */}
         <div className="file-viewer-top-actions">
           <button
             type="button"
@@ -392,22 +398,12 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
 
           <button
             type="button"
-            className="panel-tool-btn"
-            onClick={handleCopyContent}
-            title={copied ? 'Copied to clipboard' : 'Copy content'}
-            aria-label="Copy Content"
-          >
-            {copied ? <IconCheck size={14} color="var(--color-success)" /> : <IconCopy size={14} />}
-          </button>
-
-          <button
-            type="button"
-            className="panel-tool-btn"
+            className="panel-tool-btn panel-tool-toggle-btn"
             onClick={onClose}
-            title="Close Split View (Esc)"
-            aria-label="Close Split View"
+            title="Toggle Side Panel (Close)"
+            aria-label="Toggle Side Panel"
           >
-            <IconX size={15} />
+            <IconSidebar size={16} />
           </button>
         </div>
       </div>
@@ -458,15 +454,57 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             </div>
           )}
 
-          {/* Three Dots More button */}
-          <button
-            type="button"
-            className="breadcrumb-icon-btn"
-            title="More Options"
-            aria-label="More Options"
-          >
-            <IconMoreVertical size={13} />
-          </button>
+          {/* Three Dots More Menu (contains Copy File Content) */}
+          <div className="file-more-menu-container" ref={moreMenuRef}>
+            <button
+              type="button"
+              className={`breadcrumb-icon-btn ${isMoreMenuOpen ? 'is-active' : ''}`}
+              onClick={() => setIsMoreMenuOpen((prev) => !prev)}
+              title="More Options"
+              aria-label="More Options"
+            >
+              <IconMoreVertical size={13} />
+            </button>
+
+            {isMoreMenuOpen && (
+              <div className="file-more-dropdown" role="menu">
+                <button
+                  type="button"
+                  className="file-more-dropdown-item"
+                  onClick={() => {
+                    handleCopyContent()
+                    setIsMoreMenuOpen(false)
+                  }}
+                  role="menuitem"
+                >
+                  {copied ? (
+                    <>
+                      <IconCheck size={13} color="var(--color-success)" />
+                      <span className="file-more-item-label is-success">Copied to Clipboard!</span>
+                    </>
+                  ) : (
+                    <>
+                      <IconCopy size={13} />
+                      <span className="file-more-item-label">Copy File Content</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  className="file-more-dropdown-item"
+                  onClick={() => {
+                    handleReloadActiveFile()
+                    setIsMoreMenuOpen(false)
+                  }}
+                  role="menuitem"
+                >
+                  <IconRefresh size={13} />
+                  <span className="file-more-item-label">Reload File</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Paper Icon (Diff review) */}
           <button
@@ -499,16 +537,6 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             aria-label="Toggle Split Layout"
           >
             <IconSplit size={13} />
-          </button>
-
-          <button
-            type="button"
-            className="breadcrumb-icon-btn"
-            onClick={onClose}
-            title="Close Panel"
-            aria-label="Close"
-          >
-            <IconX size={14} />
           </button>
         </div>
       </div>

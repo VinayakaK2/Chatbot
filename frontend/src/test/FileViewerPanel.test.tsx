@@ -78,7 +78,7 @@ describe('FileViewerPanel Component', () => {
     expect(screen.getByText('python')).toBeDefined()
   })
 
-  it('triggers onClose when close icon button is clicked', () => {
+  it('triggers onClose when toggle side panel button is clicked', () => {
     const handleClose = vi.fn()
     render(
       <FileViewerPanel
@@ -89,8 +89,34 @@ describe('FileViewerPanel Component', () => {
       />
     )
 
-    const closeBtn = screen.getByLabelText('Close Split View')
-    fireEvent.click(closeBtn)
+    const toggleBtn = screen.getByLabelText('Toggle Side Panel')
+    fireEvent.click(toggleBtn)
     expect(handleClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens 3 dots menu and allows copying file content', async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: writeTextMock,
+      },
+    })
+
+    render(
+      <FileViewerPanel
+        isOpen={true}
+        onClose={vi.fn()}
+        initialTabs={sampleTabs}
+        activeTabId="tab-1"
+      />
+    )
+
+    const moreBtn = screen.getByLabelText('More Options')
+    fireEvent.click(moreBtn)
+
+    const copyBtn = screen.getByText('Copy File Content')
+    fireEvent.click(copyBtn)
+
+    expect(writeTextMock).toHaveBeenCalledWith(sampleTabs[0].content)
   })
 })

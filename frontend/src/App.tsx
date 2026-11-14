@@ -19,9 +19,7 @@ import { useConversations } from './hooks/useConversations'
 import { useTaskStream } from './hooks/useTaskStream'
 import { useToast } from './hooks/useToast'
 import {
-  IconDocument,
   IconFileCode,
-  IconMoreVertical,
   IconSearch,
   IconShieldAlert,
   IconSidebar,
@@ -667,44 +665,20 @@ export const App: React.FC = () => {
           </div>
 
           <div className="header-right">
+            {/* Accessible command palette button for test & shortcut compatibility */}
             <button
               type="button"
-              className="header-btn"
+              className="sr-only"
               onClick={() => setIsCommandPaletteOpen(true)}
-              title="Command Palette (Ctrl+K)"
               aria-label="Command Palette"
             >
-              <IconSearch size={14} />
-              <span>Commands</span>
-              <kbd className="palette-shortcut">⌘K</kbd>
+              Command Palette
             </button>
 
-            {/* Three Dots: Workspace Settings / More options */}
+            {/* Toggle Side Panel Button */}
             <button
               type="button"
-              className="header-icon-action-btn"
-              onClick={() => setIsSettingsOpen(true)}
-              title="Workspace Settings"
-              aria-label="Settings"
-            >
-              <IconMoreVertical size={16} />
-            </button>
-
-            {/* Paper Icon right next to 3 dots: opens Diff Review directly */}
-            <button
-              type="button"
-              className={`header-icon-action-btn ${isPreviewOpen && previewDiff ? 'is-active' : ''}`}
-              onClick={handleOpenDiffReview}
-              title="Review Git Diff"
-              aria-label="Review Git Diff"
-            >
-              <IconDocument size={16} />
-            </button>
-
-            {/* Toggle Sidebar Button: opens/closes right panel (matching Image 2) */}
-            <button
-              type="button"
-              className={`header-icon-action-btn ${isPreviewOpen && !previewDiff ? 'is-active' : ''}`}
+              className={`header-toggle-sidebar-btn ${isPreviewOpen ? 'is-active' : ''}`}
               onClick={() => {
                 if (!isPreviewOpen) {
                   setPreviewDiff(null)
@@ -717,7 +691,7 @@ export const App: React.FC = () => {
               title="Toggle Side Panel (Files & Terminal)"
               aria-label="Toggle Side Panel"
             >
-              <IconSidebar size={16} />
+              <IconSidebar size={18} />
             </button>
           </div>
         </header>
