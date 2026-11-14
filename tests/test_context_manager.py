@@ -49,6 +49,47 @@ class TestTokenEstimator:
         assert est > 1000
         assert est <= 1300
 
+    def test_exact_formula_mathematical_table_verification(self) -> None:
+        """Verify the exact mathematical reference values under E(n) = ceil((ceil(n / 3.3) + 4) * 1.15)."""
+        expected_table = [
+            (129, 51),
+            (239, 89),
+            (524, 188),
+            (1384, 488),
+            (2833, 993),
+            (5699, 1991),
+        ]
+        for char_count, expected_tokens in expected_table:
+            actual = estimate_tokens("x" * char_count)
+            assert actual == expected_tokens, f"Char count {char_count}: expected {expected_tokens}, got {actual}"
+
+    def test_boundary_transitions_and_single_char_steps(self) -> None:
+        """Verify boundary values (0, 1, 2, 3, 4) and transition points around 3.3 step intervals."""
+        assert estimate_tokens("") == 0
+        assert estimate_tokens("a") == 6   # ceil(1/3.3)=1 -> 1+4=5 -> 5*1.15=5.75 -> ceil=6
+        assert estimate_tokens("aa") == 6  # ceil(2/3.3)=1 -> 1+4=5 -> ceil=6
+        assert estimate_tokens("aaa") == 6 # ceil(3/3.3)=1 -> 1+4=5 -> ceil=6
+        assert estimate_tokens("aaaa") == 7 # ceil(4/3.3)=2 -> 2+4=6 -> 6*1.15=6.9 -> ceil=7
+
+    def test_multilingual_unicode_cjk_emoji_estimation(self) -> None:
+        """Verify that Unicode, CJK, emoji sequences, and code blocks evaluate predictably."""
+        # Unicode Latin / Accented
+        latin_text = "Café résumé naïve façade"
+        assert estimate_tokens(latin_text) > 0
+
+        # CJK / Japanese text
+        cjk_text = "吾輩は猫である。名前はまだ無い。" # 16 characters
+        assert estimate_tokens(cjk_text) == estimate_tokens("a" * len(cjk_text))
+
+        # Emoji sequences
+        emoji_text = "🚀🔥💻🤖🎉" # 5 characters
+        assert estimate_tokens(emoji_text) == estimate_tokens("a" * len(emoji_text))
+
+        # Multiline code block with indentation
+        code_block = "def factorial(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n"
+        assert estimate_tokens(code_block) > 0
+        assert estimate_tokens(code_block) == estimate_tokens("x" * len(code_block))
+
 
 class TestToolOutputBounding:
     """Verifies non-lossy tool output bounding, head/tail preservation, and exit code metadata."""
@@ -104,6 +145,24 @@ class TestToolOutputBounding:
         with pytest.raises(OutputBudgetExceededError) as exc_info:
             bound_text_content(huge_payload, max_tokens=4)
         assert "less than base overhead" in str(exc_info.value)
+
+    def test_boundary_one_unit_below_and_above_cap(self) -> None:
+        """Verify boundary behavior with limits right around critical thresholds."""
+        payload = "Line of log output with error details.\n" * 500
+        for cap in [63, 64, 65, 99, 100, 101, 199, 200, 201]:
+            bounded, truncated, _ = bound_text_content(payload, max_tokens=cap)
+            assert truncated is True
+            assert estimate_tokens(bounded) <= cap, f"Failed cap={cap}: got {estimate_tokens(bounded)}"
+
+    def test_heavy_metadata_and_progressive_trimming(self) -> None:
+        """Verify that large metadata strings do not cause bounded output to overshoot cap."""
+        payload = "Traceback (most recent call last):\n  File 'test.py', line 42\nValueError: failed\n" * 200
+        # Extreme metadata with lengthy command and exit code
+        meta = {"exit_code": 137, "command": "pytest --verbose -k test_concurrency_race_condition_under_heavy_load"}
+        bounded, truncated, _ = bound_text_content(payload, max_tokens=80, metadata=meta)
+        assert truncated is True
+        assert "exit_code=137" in bounded
+        assert estimate_tokens(bounded) <= 80
 
 
 class TestDeterministicAssembly:
@@ -178,11 +237,11 @@ class TestDeterministicAssembly:
         mgr = ContextManager()
         hist = [
             AgentMessage.create_user("My token is Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.secret123"),
-            AgentMessage(role=AgentMessageRole.TOOL, content="Server returned sk-ant-api03-abcdefghijklmnop12345678", tool_call_id="call_2"),
+            AgentMessage(role=AgentMessageRole.TOOL, content="Server returned sk-ant-api03-abcdefghijklmnop12345678 and Authorization: Basic dXNlcjpwYXNzd29yZDEyMzQ1Ng==", tool_call_id="call_2"),
         ]
         res = mgr.assemble_context(
             task_id="task_sec_1",
-            user_prompt="Audit API key: AKIA1234567890ABCDEF",
+            user_prompt="Audit API key: AKIA1234567890ABCDEF with Authorization: Bearer top_secret_credential_token",
             global_instructions="Safety rule: password is super_secret_pass_123",
             history=hist,
             extra_secrets=["super_secret_pass_123"],
@@ -193,6 +252,8 @@ class TestDeterministicAssembly:
         assert "[REDACTED_SECRET]" in full_assembled_text
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in full_assembled_text
         assert "sk-ant-api03-abcdefghijklmnop12345678" not in full_assembled_text
+        assert "dXNlcjpwYXNzd29yZDEyMzQ1Ng==" not in full_assembled_text
+        assert "top_secret_credential_token" not in full_assembled_text
 
 
 class TestBudgetAndOverflow:

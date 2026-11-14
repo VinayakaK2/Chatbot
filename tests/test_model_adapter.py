@@ -8,6 +8,7 @@ from pydantic import SecretStr
 from model.contracts import (
     ModelAuthError,
     ModelConnectionError,
+    ModelContextLengthExceededError,
     ModelProviderError,
     ModelRateLimitError,
     ModelResponseError,
@@ -243,3 +244,36 @@ class TestVLLMAdapterFailures:
         result = await adapter.generate("Test retry")
         assert result.text == "Recovered successfully!"
         assert call_count == 2
+
+    async def test_context_length_exceeded_raises_specific_error_without_retry(self) -> None:
+        """HTTP 400 with context length message raises ModelContextLengthExceededError and does not retry."""
+        call_count = 0
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(
+                400,
+                json={"error": {"message": "This model's maximum context length is 32768 tokens, however you requested 35000 tokens."}},
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = VLLMAdapter("https://vllm.test/v1", "Qwen", max_retries=2, client=client)
+
+        with pytest.raises(ModelContextLengthExceededError) as exc_info:
+            await adapter.generate("Very large prompt")
+        assert "context length exceeded" in exc_info.value.message
+        assert exc_info.value.status_code == 400
+        assert call_count == 1  # Verify no wasteful retry on context length error
+
+    async def test_http_413_payload_too_large_raises_context_length_error(self) -> None:
+        """HTTP 413 Payload Too Large raises ModelContextLengthExceededError."""
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda req: httpx.Response(413, text="Payload Too Large"))
+        )
+        adapter = VLLMAdapter("https://vllm.test/v1", "Qwen", max_retries=1, client=client)
+
+        with pytest.raises(ModelContextLengthExceededError) as exc_info:
+            await adapter.generate("Huge payload")
+        assert "payload too large" in exc_info.value.message
+        assert exc_info.value.status_code == 413

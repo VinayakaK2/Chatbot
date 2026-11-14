@@ -14,7 +14,7 @@ import json
 import logging
 import math
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.context_models import (
     CATEGORY_DEFAULT_PRIORITIES,
@@ -255,6 +255,15 @@ class ContextManager:
         history_len = len(raw_history)
         recent_threshold = max(0, history_len - budget.max_recent_messages)
 
+        # Pre-scan history to map tool_call_id to parent assistant message turn and priority (F6-07)
+        parent_tool_call_info: Dict[str, Tuple[int, int]] = {}
+        for idx, msg in enumerate(raw_history):
+            if msg.role == AgentMessageRole.ASSISTANT and msg.tool_calls:
+                is_rec = idx >= recent_threshold
+                turn_prio = 7 if is_rec else 9
+                for tc in msg.tool_calls:
+                    parent_tool_call_info[tc.id] = (idx, turn_prio)
+
         for idx, msg in enumerate(raw_history):
             clean_msg_content = redact_secrets(msg.content or "", secrets)
             is_recent = idx >= recent_threshold
@@ -263,7 +272,8 @@ class ContextManager:
 
             if msg.role == AgentMessageRole.TOOL:
                 category = ContextCategory.TOOL_OUTPUT
-                prio = 8
+                parent_info = parent_tool_call_info.get(msg.tool_call_id or "")
+                prio = parent_info[1] if parent_info else (7 if is_recent else 9)
 
             # Bound tool outputs before estimating tokens
             bounded_content = clean_msg_content
@@ -449,11 +459,37 @@ class ContextManager:
         # Sort back to original chronological history order!
         history_sorted = sorted(history_accepted, key=lambda it: it.metadata.get("history_index", 0))
 
+        # Tool-Call Integrity Verification (F6-07):
+        # Collect history indices of all accepted history items
+        accepted_history_indices: Set[int] = {
+            it.metadata.get("history_index", -1) for it in history_sorted
+        }
+
         for it in history_sorted:
             role_str = it.metadata.get("role", "user")
             role = AgentMessageRole(role_str)
             raw_tcs = it.metadata.get("tool_calls")
             parsed_tcs = [ToolCallRecord(**tc) for tc in raw_tcs] if raw_tcs else None
+            h_idx = it.metadata.get("history_index", -1)
+
+            # Prevent orphaned tool messages: if its caller in raw history was dropped by budget, omit it
+            if role == AgentMessageRole.TOOL and it.source_id:
+                parent_info = parent_tool_call_info.get(it.source_id)
+                if parent_info:
+                    parent_idx = parent_info[0]
+                    if parent_idx not in accepted_history_indices:
+                        logger.warning(
+                            "Orphaned tool message detected (caller at index %d was dropped by budget); omitting tool_call_id=%s from wire messages",
+                            parent_idx,
+                            it.source_id,
+                        )
+                        continue
+                elif h_idx > 0 and (h_idx - 1) not in accepted_history_indices:
+                    logger.warning(
+                        "Orphaned tool message detected (preceding turn was dropped); omitting tool_call_id=%s from wire messages",
+                        it.source_id,
+                    )
+                    continue
 
             msg = AgentMessage(
                 role=role,

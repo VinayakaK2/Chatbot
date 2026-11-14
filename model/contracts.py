@@ -43,6 +43,10 @@ class ModelResponseError(ModelError):
     """Raised when upstream response payload is malformed, missing, or unexpected."""
 
 
+class ModelContextLengthExceededError(ModelError):
+    """Raised when upstream model provider rejects request due to context length overflow (HTTP 400 or 413)."""
+
+
 # ==============================================================================
 # Data Schemas
 # ==============================================================================

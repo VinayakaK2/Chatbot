@@ -1,9 +1,9 @@
 # Phase 6 Token Budget & Estimation Forensic Verification
 
 **Reference Standards:** `2604.14228v3.pdf` (§3.6, §7.1, §7.2) and `docs/phases.md` §6  
-**Module Audited:** `core/context_manager.py` & `core/context_models.py`  
+**Module Audited:** `core/context_manager.py`, `core/context_models.py`, `model/contracts.py`, `model/vllm_adapter.py`  
 **Auditor:** Tokenization & Context Budget Specialist  
-**Status:** **VERIFIED & REMEDIATED — MATHEMATICAL BOUNDING INVARIANT ENFORCED**
+**Status:** **VERIFIED & REMEDIATED — MATHEMATICAL INVARIANTS & REJECTION HANDLING PROVEN**
 
 ---
 
@@ -24,94 +24,92 @@ where:
 
 ---
 
-## 2. Token Estimation Heuristic vs. Actual Tokenizers
+## 2. Token Estimation Heuristic: Implementation vs. Mathematical Specification (F6-01)
 
-### A. The Heuristic Formula
+### A. The Formal Estimator Formula
 `core/context_manager.py`:
-$$\text{estimate}(s) = \left\lceil \left( \left\lceil \frac{\text{len}(s)}{3.3} \right\rceil + 4 \right) \times 1.15 \right\rceil$$
+$$E(n) = \left\lceil \left( \left\lceil \frac{n}{3.3} \right\rceil + 4 \right) \times 1.15 \right\rceil$$
+for string length $n \ge 1$, and $E(0) = 0$ for empty strings or `None`.
 
-### B. Empirical Token Count Comparison (Per 1,000 Characters)
+Where:
+- `ESTIMATOR_CHARS_PER_TOKEN = 3.3`
+- `ESTIMATOR_BASE_OVERHEAD = 4`
+- `ESTIMATOR_SAFETY_FACTOR = 1.15`
 
-| Text Category | Characteristics | Real BPE Tokens (cl100k / Qwen2.5) | Heuristic Estimate ($\lceil (\text{len}/3.3 + 4) \times 1.15 \rceil$) | Error Ratio (Est / Real) | Safety Posture |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **English Prose** | News, documentation, chat prose | 240 – 260 | **354** | +36% to +47% | **Conservative (Safe)** |
-| **Python Code** | Syntax, indentation, variable names | 280 – 305 | **354** | +16% to +26% | **Conservative (Safe)** |
-| **JSON Payload** | Brackets, quotes, keys, whitespace | 310 – 340 | **354** | +4% to +14% | **Conservative (Safe)** |
-| **Stack Traces** | Paths, line numbers, exception names | 260 – 290 | **354** | +22% to +36% | **Conservative (Safe)** |
-| **Long Whitespace** | Repeated tabs, spaces, newlines | 120 – 200 | **354** | +77% to +195% | **Conservative (Safe)** |
-| **Japanese (Kanji/Kana)** | Multibyte CJK characters | 950 – 1,200 | **354** | -63% to -70% | **UNDERESTIMATES (Risk)** |
-| **Emoji Sequences** | Multibyte Unicode symbols | 800 – 1,100 | **354** | -56% to -68% | **UNDERESTIMATES (Risk)** |
+### B. Forensic Reconciliation of Table Discrepancy
+The previous audit report table listed approximate token values that did not evaluate $E(n)$ on the exact character counts. The actual implementation in `core/context_manager.py` implements the formula with 100% mathematical fidelity.
 
-### C. Analysis of Token Estimation Findings
-1. **Code & Latin Text:** The heuristic provides a strict $16\%$ to $47\%$ overestimate, successfully protecting model context from accidental overflow.
-2. **CJK & Multibyte Text:** In BPE tokenizers, each CJK ideograph is typically 1 to 2 tokens. Because Python `len()` counts Unicode code points (characters) rather than UTF-8 bytes, 1,000 Japanese characters is counted as length 1,000, yielding 354 estimated tokens, whereas an actual BPE tokenizer produces ~1,000 tokens.
-   - *Mitigation:* In the current deployment target (local coding assistant operating primarily on English code and repository artifacts), this risk is mitigated by the 512-token safety margin and 2,048-token output reserve. However, for full multilingual safety, UTF-8 byte length or a CJK scaling factor is recommended.
+| Characters ($n$) | Step 1: $\lceil n / 3.3 \rceil$ | Step 2: $+ 4$ | Step 3: $\times 1.15$ | Formula Expected $E(n)$ | Implementation Output `estimate_tokens()` | Verification Verdict |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **0** | 0 | 0 | 0 | **0** | **0** | **MATCH** |
+| **1** | 1 | 5 | 5.75 | **6** | **6** | **MATCH** |
+| **129** | 40 | 44 | 50.60 | **51** | **51** | **MATCH** |
+| **239** | 73 | 77 | 88.55 | **89** | **89** | **MATCH** |
+| **524** | 159 | 163 | 187.45 | **188** | **188** | **MATCH** |
+| **1,384** | 420 | 424 | 487.60 | **488** | **488** | **MATCH** |
+| **2,833** | 859 | 863 | 992.45 | **993** | **993** | **MATCH** |
+| **5,699** | 1727 | 1731 | 1990.65 | **1,991** | **1,991** | **MATCH** |
+
+*Test Evidence:* Covered by `test_exact_formula_mathematical_table_verification` in `tests/test_context_manager.py`.
 
 ---
 
-## 3. Remediation of F6-01 & F6-12: Tool Output Bounding Invariant
+## 3. Tool Output Bounding: Inverse-Bound Math & Postcondition Guarantee (F6-01 & F6-12)
 
-### A. Root Cause in F6-01
-In the initial implementation of `bound_text_content()`:
-```python
-char_budget = max(200, int(max_tokens * ESTIMATOR_CHARS_PER_TOKEN * 0.9))
-```
-When `max_tokens = 1000`:
-- `char_budget = int(1000 * 3.3 * 0.9) = 2970`.
-- Head (40%) = 1,188 chars; Tail (60%) = 1,782 chars.
-- Marker = `\n\n... [Output truncated from 500110 chars to ~2970 chars] ...\n\n` = 63 chars.
-- Total bounded string length = $1188 + 63 + 1782 = \mathbf{3,033}$ characters.
-- Token evaluation: $\text{estimate}(3033) = \mathbf{1,063} \text{ tokens} > 1,000$.
-
-### B. Mathematical Inversion Formula
-To strictly guarantee $\text{estimate}(\text{bounded}) \le \text{max\_tokens}$, we invert the token estimator formula:
+### A. Mathematical Inversion Formula
+To guarantee $\text{estimate}(\text{bounded}) \le \text{max\_tokens}$, we invert the token estimator formula:
 $$\left( \frac{\text{len}}{3.3} + 4 \right) \times 1.15 \le \text{max\_tokens}$$
 $$\frac{\text{len}}{3.3} \le \frac{\text{max\_tokens}}{1.15} - 4$$
-$$\text{target\_max\_chars} = \max\left(0, \left\lfloor \left( \frac{\text{max\_tokens}}{1.15} - 4 \right) \times 3.3 \right\rfloor\right)$$
+$$\text{safe\_token\_ceiling} = \frac{\text{max\_tokens}}{1.15} - 4$$
+$$\text{target\_max\_chars} = \max\left(0, \left\lfloor \text{safe\_token\_ceiling} \times 3.3 \right\rfloor\right)$$
 
-Subtracting the maximum truncation marker length (~85 characters):
-$$\text{char\_budget} = \max(0, \text{target\_max\_chars} - 85)$$
+Subtracting the maximum truncation marker length (~85 characters plus metadata length):
+$$\text{char\_budget} = \max(0, \text{target\_max\_chars} - 85 - \text{len}(\text{meta\_str}))$$
 
-### C. F6-12 Loop Vulnerability & Fail-Closed Invariant
-In earlier code, progressive trimming stopped if `len(tail_part) <= 10`, which could allow oversized text when `max_tokens` was very small.
-Remediated implementation in `core/context_manager.py`:
-1. Progressive trimming reduces tail to 0 and head to 0 if necessary.
-2. Defined `OutputBudgetExceededError(ContextError)` in `core/context_models.py`.
-3. Added fail-closed pre-condition: if `safe_token_ceiling <= 0` (e.g. `max_tokens < 5`), raises `OutputBudgetExceededError`.
-4. Added post-condition check:
-   ```python
-   if estimate_tokens(bounded) > max_tokens:
-       raise OutputBudgetExceededError(
-           f"Bounded tool output could not be reduced below {max_tokens} tokens (got {estimate_tokens(bounded)} tokens)."
-       )
-   ```
+### B. Fail-Closed Boundary Handling & Progressive Trimming
+1. **Pre-condition check:** If `safe_token_ceiling <= 0` (e.g. `max_tokens < 5`), raises `OutputBudgetExceededError` fail-closed.
+2. **Progressive Trimming:** While `estimate_tokens(bounded) > max_tokens`, tail is progressively trimmed down to 0; if still oversized, head is trimmed down to 0.
+3. **Post-condition check:** If the bare truncation marker alone exceeds `max_tokens`, raises `OutputBudgetExceededError` rather than silently returning oversized content.
 
-### D. Empirical Invariant Verification
-Tested across a spectrum of token limits in `test_bounded_output_never_exceeds_max_tokens_budget` and `test_impossibly_small_budget_raises_error`:
+### C. Empirical Tool Bounding Output vs Configured Cap
 
-| `max_tokens` Limit | Input Length (chars) | Bounded Output (chars) | Estimated Tokens | Invariant Satisfied? |
+Tested across caps [63, 64, 65, 99, 100, 101, 199, 200, 201, 500, 1000, 2000] with 500,000 character inputs and heavy metadata (`exit_code=137`):
+
+| Configured Cap (`max_tokens`) | Original Chars | Bounded Chars | Estimated Tokens | Postcondition Satisfied? |
 | :---: | :---: | :---: | :---: | :---: |
-| **64** | 500,000 | 129 | **48** | **YES ($\le 64$)** |
-| **100** | 500,000 | 239 | **87** | **YES ($\le 100$)** |
-| **200** | 500,000 | 524 | **186** | **YES ($\le 200$)** |
-| **500** | 500,000 | 1,384 | **486** | **YES ($\le 500$)** |
-| **1,000** | 500,000 | 2,833 | **991** | **YES ($\le 1000$)** |
-| **2,000** | 500,000 | 5,699 | **1,990** | **YES ($\le 2000$)** |
+| **64** | 500,000 | 146 | **57** | **YES ($\le 64$)** |
+| **100** | 500,000 | 250 | **92** | **YES ($\le 100$)** |
+| **200** | 500,000 | 537 | **193** | **YES ($\le 200$)** |
+| **500** | 500,000 | 1,399 | **493** | **YES ($\le 500$)** |
+| **1,000** | 500,000 | 2,834 | **993** | **YES ($\le 1000$)** |
+| **2,000** | 500,000 | 5,703 | **1,993** | **YES ($\le 2000$)** |
 | **4** | 500,000 | N/A | N/A | **RAISES `OutputBudgetExceededError`** |
+
+*Test Evidence:* Covered by `test_bounded_output_never_exceeds_max_tokens_budget`, `test_boundary_one_unit_below_and_above_cap`, `test_heavy_metadata_and_progressive_trimming`, and `test_impossibly_small_budget_raises_error`.
 
 ---
 
-## 4. F6-13: Application-Level vs. Provider-Level Tokenization Boundary
+## 4. F6-02: Separation of Application Budgeting, Provider Tokenization, and Rejection Handling
 
-### A. Conceptual Architecture
-The Phase 6 context budgeting model operates strictly at the **application layer**:
-- `ContextManager` uses a deterministic character-based estimator ($3.3$ chars/token with $+4$ base and $+15\%$ buffer) to guarantee fast ($<1\text{ms}$), offline, zero-dependency context admission and prioritization.
-- The formula $B_{\text{input}} = M_{\text{ctx}} - M_{\text{out}} - M_{\text{margin}}$ creates a reserved output headroom of 2,048 tokens and an application safety buffer of 512 tokens.
+Three concepts must remain strictly separated:
 
-### B. Upstream Provider Divergence & Defenses
-- For Latin text and programming languages (Python, TypeScript, SQL, JSON), the application heuristic overestimates by $16\%$ to $47\%$, ensuring that the actual BPE tokens sent to the provider model are significantly fewer than budgeted.
-- For CJK and multibyte scripts, BPE token counts can exceed character counts.
-- **Defense-in-Depth:**
-  1. *Safety Margin Buffer ($M_{\text{margin}} = 512$):* Absorbs token divergence on moderate-sized inputs.
-  2. *Provider Error Handling:* In `core/model_adapter.py` / `VLLMAdapter`, HTTP 400/413 context window overflow responses from upstream vLLM/OpenAI-compatible servers are caught and translated into structured `ProviderContextLengthExceededError`.
-  3. *Clean Failure Degradation:* The runtime degrades gracefully with a `LIMIT_REACHED` event rather than crashing or hanging.
+### Concept A: Application Heuristic Budget
+- Implemented in `core/context_manager.py`.
+- Fast, zero-dependency, character-based upper-bound estimation.
+- Purpose: Deterministic context admission, tool bounding, and priority sorting before network dispatch.
+- Overestimates English prose and programming languages by $16\%$ to $47\%$.
+- **Explicit Limitation:** The 512-token safety margin ($M_{\text{margin}}$) is an application buffer for standard code and English prose; **it is NOT a universal multilingual safety guarantee**. On CJK, Arabic, or heavy emoji sequences, character count underestimates BPE tokens.
+
+### Concept B: Upstream Provider Tokenizer & Context Window
+- Implemented in the model server (vLLM / Qwen2.5-Coder BPE tokenizer).
+- Counts exact BPE subwords and enforces hard attention-window boundaries (e.g. 32,768 tokens).
+- The application cannot determine exact BPE counts without downloading provider-specific tokenizer binaries or executing remote tokenize endpoints.
+
+### Concept C: Provider Rejection Handling & Error Normalization
+- Implemented in `model/contracts.py` and `model/vllm_adapter.py`.
+- When an upstream provider rejects an oversized request (HTTP 400 or HTTP 413):
+  1. `VLLMAdapter` inspects the response body for context-length error phrases (`"maximum context length"`, `"context length exceeded"`).
+  2. Maps the error to `ModelContextLengthExceededError(ModelError)`.
+  3. Fails immediately without executing wasteful retries (retrying an oversized payload will never succeed).
+  4. `AgentLoop` catches `ModelError` and terminates gracefully with `TaskStatus.FAILED` and a clear diagnostic termination reason (`"model_error"`), emitting a `TASK_LIMIT_REACHED` event.
+- *Test Evidence:* Verified via `test_context_length_exceeded_raises_specific_error_without_retry` and `test_http_413_payload_too_large_raises_context_length_error` in `tests/test_model_adapter.py`.

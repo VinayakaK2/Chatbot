@@ -51,6 +51,8 @@ SAFE_ENV_VARS: Set[str] = {
 # Regex to detect API keys or bearer tokens in command output
 SECRET_PATTERNS: List[re.Pattern] = [
     re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{15,}", re.IGNORECASE),
+    re.compile(r"Basic\s+[a-zA-Z0-9+/=]{16,}", re.IGNORECASE),
+    re.compile(r"Authorization\s*:\s*[^\r\n]{8,}", re.IGNORECASE),
     re.compile(r"(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]{16,}['\"]?", re.IGNORECASE),
     re.compile(r"\bsk-[a-zA-Z0-9_\-]{20,}\b"),
 ]

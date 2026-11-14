@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from model.contracts import (
     ModelAuthError,
     ModelConnectionError,
+    ModelContextLengthExceededError,
     ModelProvider,
     ModelProviderError,
     ModelRateLimitError,
@@ -150,6 +151,29 @@ class VLLMAdapter(ModelProvider):
                     raise ModelRateLimitError(
                         "Upstream model rate limit exceeded (HTTP 429)",
                         status_code=429,
+                    )
+
+                # HTTP 400 / 413: Client-side syntax error, context length exceeded, or payload too large (non-transient)
+                if resp.status_code in (400, 413):
+                    try:
+                        err_data = resp.json()
+                        err_msg = str(err_data.get("error", {}).get("message", resp.text))
+                    except Exception:
+                        err_msg = resp.text
+                    err_lower = err_msg.lower()
+                    if any(phrase in err_lower for phrase in ("context length", "context_length", "maximum context", "token limit", "too many tokens")):
+                        raise ModelContextLengthExceededError(
+                            f"Upstream model rejected request: context length exceeded ({err_msg})",
+                            status_code=resp.status_code,
+                        )
+                    if resp.status_code == 413:
+                        raise ModelContextLengthExceededError(
+                            f"Upstream model rejected request: payload too large ({err_msg})",
+                            status_code=413,
+                        )
+                    raise ModelProviderError(
+                        f"Model request rejected with HTTP 400: {err_msg}",
+                        status_code=400,
                     )
 
                 # HTTP 5xx: Server side error (may be transient, e.g. 503)
