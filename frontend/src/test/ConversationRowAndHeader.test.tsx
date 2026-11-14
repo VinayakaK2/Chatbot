@@ -129,6 +129,35 @@ describe('ConversationRow & Status Indicators', () => {
     fireEvent.click(collapseBtn)
     expect(onToggleCollapse).toHaveBeenCalledTimes(1)
   })
+
+  it('renders search button in sidebar header next to collapse and toggles search field', () => {
+    render(
+      <Sidebar
+        conversations={mockConversations}
+        projects={[]}
+        activeConversationId="c-1"
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        onTogglePinConversation={vi.fn()}
+        onOpenSettings={vi.fn()}
+        isCollapsed={false}
+        onToggleCollapse={vi.fn()}
+      />
+    )
+
+    const searchBtn = screen.getByRole('button', { name: /Search conversations/i })
+    expect(searchBtn).toBeDefined()
+
+    // Initially search box input is hidden
+    expect(screen.queryByPlaceholderText(/Search conversations/i)).toBeNull()
+
+    // Click search icon in header
+    fireEvent.click(searchBtn)
+
+    // Now search input appears
+    expect(screen.getByPlaceholderText(/Search conversations/i)).toBeDefined()
+  })
 })
 
 describe('MessageItem Right/Left Alignment', () => {

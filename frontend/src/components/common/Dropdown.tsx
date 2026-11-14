@@ -29,6 +29,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   className = '',
 }) => {
   const [isOpen, setIsOpen] = useState(false)
+  const [openUpward, setOpenUpward] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Close on outside click
@@ -54,6 +55,19 @@ export const Dropdown: React.FC<DropdownProps> = ({
     }
   }
 
+  const handleToggle = () => {
+    if (!isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      // If within 220px of bottom, open upward
+      if (rect.bottom + 220 > window.innerHeight) {
+        setOpenUpward(true)
+      } else {
+        setOpenUpward(false)
+      }
+    }
+    setIsOpen((prev) => !prev)
+  }
+
   return (
     <div
       className={`dropdown-container ${className}`.trim()}
@@ -62,7 +76,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
     >
       <div
         className="dropdown-trigger"
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={handleToggle}
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
@@ -73,7 +87,9 @@ export const Dropdown: React.FC<DropdownProps> = ({
 
       {isOpen && (
         <div
-          className={`dropdown-menu dropdown-align-${align}`}
+          className={`dropdown-menu dropdown-align-${align} align-${align} ${
+            openUpward ? 'position-top' : 'position-bottom'
+          }`}
           role="menu"
           aria-orientation="vertical"
         >

@@ -187,6 +187,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
 }) => {
   const [searchQuery, setSearchQuery] = useState('')
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({
     default: true,
   })
@@ -223,15 +224,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="brand-subtitle">v0.1.0 • Workspace</span>
           </div>
         </div>
-        <button
-          type="button"
-          className="sidebar-collapse-btn"
-          onClick={onToggleCollapse}
-          title="Collapse sidebar (Ctrl+B)"
-          aria-label="Collapse sidebar"
-        >
-          <IconSidebar size={16} />
-        </button>
+
+        <div className="sidebar-header-actions">
+          {/* Search conversations toggle icon */}
+          <button
+            type="button"
+            className={`sidebar-header-btn ${isSearchOpen ? 'is-active' : ''}`}
+            onClick={() => {
+              setIsSearchOpen((prev) => !prev)
+              if (isSearchOpen) {
+                setSearchQuery('')
+              }
+            }}
+            title="Search conversations"
+            aria-label="Search conversations"
+          >
+            <IconSearch size={15} />
+          </button>
+
+          {/* Collapse sidebar button */}
+          <button
+            type="button"
+            className="sidebar-collapse-btn"
+            onClick={onToggleCollapse}
+            title="Collapse sidebar (Ctrl+B)"
+            aria-label="Collapse sidebar"
+          >
+            <IconSidebar size={16} />
+          </button>
+        </div>
       </div>
 
       {/* New Conversation Button */}
@@ -246,28 +267,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Search Field */}
-      <div className="sidebar-search-box">
-        <IconSearch size={14} color="var(--text-muted)" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search conversations..."
-          className="sidebar-search-input"
-          aria-label="Search conversation history"
-        />
-        {searchQuery && (
-          <button
-            type="button"
-            className="sidebar-search-clear"
-            onClick={() => setSearchQuery('')}
-            aria-label="Clear search"
-          >
-            <IconX size={12} />
-          </button>
-        )}
-      </div>
+      {/* Search Field (Only shown when search icon is clicked) */}
+      {isSearchOpen && (
+        <div className="sidebar-search-box is-active">
+          <IconSearch size={14} color="var(--text-muted)" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search conversations..."
+            className="sidebar-search-input"
+            aria-label="Search conversation history"
+            autoFocus
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="sidebar-search-clear"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+            >
+              <IconX size={12} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Scrollable Conversation History & Projects */}
       <div className="sidebar-scroll-area">
