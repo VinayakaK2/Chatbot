@@ -163,7 +163,8 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
                 },
               },
             ]}
-            align="right"
+            align="right-outside"
+            usePortal={true}
           />
         </div>
       </div>
