@@ -2,10 +2,11 @@
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import uuid
 
 from api.schemas.events import RuntimeEvent, RuntimeEventType
@@ -13,12 +14,32 @@ from api.schemas.tasks import TaskCreateRequest, TaskResponse, TaskStatus
 from core.agent_loop import AgentExecutionRequest, AgentLoop, DEFAULT_SYSTEM_PROMPT
 from core.config import Settings, get_settings
 from core.context_models import ContextBudgetConfig
-from core.approval import ApprovalManager, get_global_approval_manager
+from core.approval import ApprovalManager, ApprovalStatus, get_global_approval_manager
+from core.recovery import StartupRecoveryEngine
+from core.session_manager import SessionManager
 from core.tool_dispatcher import ToolDispatcher
 from core.tool_registry import ToolRegistry, get_global_registry
 from core.workspace import WorkspaceContext
 from model.contracts import ModelError, ModelProvider
 from model.vllm_adapter import VLLMAdapter
+from storage.database import DatabaseManager
+from storage.migrations import MigrationRunner
+from storage.models import (
+    ApprovalRecord,
+    RecoveryStatus,
+    SessionRecord,
+    SessionStatus,
+    TaskRecord,
+)
+from storage.repositories import (
+    ApprovalRepository,
+    InvalidStateTransitionError,
+    ModelCallRepository,
+    SessionRepository,
+    TaskRepository,
+    ToolExecutionRepository,
+    TranscriptRepository,
+)
 from tools.registry_setup import register_shell_tools, register_workspace_tools
 
 logger = logging.getLogger("agent_runtime.core.task_service")
@@ -56,10 +77,13 @@ class TaskService:
         agent_loop: Optional[AgentLoop] = None,
         workspace_context: Optional[WorkspaceContext] = None,
         approval_manager: Optional[ApprovalManager] = None,
+        database_manager: Optional[DatabaseManager] = None,
+        session_manager: Optional[SessionManager] = None,
         auto_register_tools: bool = True,
         auto_register_shell_tools: bool = False,
+        auto_run_recovery: bool = True,
     ) -> None:
-        """Initialize the task service with model provider, registry, dispatcher, and agent loop."""
+        """Initialize the task service with model provider, registry, dispatcher, persistence, and agent loop."""
         self.settings = settings or get_settings()
         self.tool_registry = tool_registry or get_global_registry()
         self.approval_manager = approval_manager or get_global_approval_manager()
@@ -73,6 +97,50 @@ class TaskService:
             if self.settings.workspace_root
             else WorkspaceContext(root_path=os.getcwd())
         )
+
+        # Persistence subsystem initialization
+        if database_manager is not None:
+            self.database_manager = database_manager
+        elif self.settings.database_url:
+            self.database_manager = DatabaseManager(
+                db_path=self.settings.database_url,
+                busy_timeout_ms=self.settings.database_busy_timeout_ms,
+                enable_wal=self.settings.database_wal_mode,
+            )
+        elif os.environ.get("PYTEST_CURRENT_TEST"):
+            self.database_manager = DatabaseManager(
+                db_path=f"file:mem_{uuid.uuid4().hex}?mode=memory&cache=shared",
+                busy_timeout_ms=self.settings.database_busy_timeout_ms,
+                enable_wal=False,
+            )
+        else:
+            self.database_manager = DatabaseManager(
+                db_path="state.db",
+                busy_timeout_ms=self.settings.database_busy_timeout_ms,
+                enable_wal=self.settings.database_wal_mode,
+            )
+
+        # Apply schema migrations
+        MigrationRunner.apply_all(self.database_manager.get_connection())
+
+        # Storage repositories
+        self.session_repo = SessionRepository(self.database_manager)
+        self.task_repo = TaskRepository(self.database_manager)
+        self.transcript_repo = TranscriptRepository(self.database_manager)
+        extra_sec = [self.settings.agent_model_api_key.get_secret_value()] if self.settings.agent_model_api_key else None
+        self.tool_repo = ToolExecutionRepository(self.database_manager, extra_secrets=extra_sec)
+        self.model_call_repo = ModelCallRepository(self.database_manager)
+        self.approval_repo = ApprovalRepository(self.database_manager)
+        self.approval_manager.approval_repo = self.approval_repo
+        self.session_manager = session_manager or SessionManager(self.database_manager)
+        self.recovery_engine = StartupRecoveryEngine(self.database_manager)
+
+        # Automatic startup recovery reconciliation
+        if auto_run_recovery:
+            try:
+                self.recovery_engine.reconcile()
+            except Exception as exc:
+                logger.warning("Startup recovery reconciliation warning: %s", str(exc))
 
         # Register standard Phase 4 workspace tools into registry if enabled and not already present
         if auto_register_tools and not self.tool_registry.has("read_file"):
@@ -101,6 +169,13 @@ class TaskService:
 
         if agent_loop is not None:
             self.agent_loop = agent_loop
+            # Inject storage repositories if not already set
+            if getattr(self.agent_loop, "tool_execution_repo", None) is None:
+                self.agent_loop.tool_execution_repo = self.tool_repo
+            if getattr(self.agent_loop, "model_call_repo", None) is None:
+                self.agent_loop.model_call_repo = self.model_call_repo
+            if getattr(self.agent_loop, "transcript_repo", None) is None:
+                self.agent_loop.transcript_repo = self.transcript_repo
         elif self.model_provider is not None:
             budget_config = ContextBudgetConfig(
                 total_context_tokens=self.settings.context_window_tokens,
@@ -113,6 +188,9 @@ class TaskService:
                 dispatcher=self.tool_dispatcher,
                 registry=self.tool_registry,
                 budget_config=budget_config,
+                tool_execution_repo=self.tool_repo,
+                model_call_repo=self.model_call_repo,
+                transcript_repo=self.transcript_repo,
             )
         else:
             self.agent_loop = None
@@ -124,6 +202,7 @@ class TaskService:
         self._cancellation_tokens: Dict[str, asyncio.Event] = {}
         self._task_loops: Dict[str, asyncio.AbstractEventLoop] = {}
         self._task_locks: Dict[str, threading.RLock] = {}
+        self._cleaned_up_tasks: Set[str] = set()
         self._registry_lock = threading.Lock()
 
     @staticmethod
@@ -179,6 +258,29 @@ class TaskService:
                     return False, target_task
 
                 self._tasks[task_id] = target_task
+                try:
+                    task_rec = TaskRecord(
+                        id=task_id,
+                        session_id=target_task.session_id,
+                        prompt=target_task.prompt,
+                        status=target_task.status,
+                        recovery_status=RecoveryStatus(target_task.recovery_status) if target_task.recovery_status else None,
+                        response_text=target_task.response_text,
+                        finish_reason=target_task.finish_reason,
+                        model=target_task.model,
+                        usage_json=json.dumps(target_task.usage) if target_task.usage else None,
+                        error=target_task.error,
+                        iterations=target_task.iterations or 0,
+                        tool_calls_count=target_task.tool_calls_count or 0,
+                        termination_reason=target_task.termination_reason,
+                        created_at=target_task.created_at,
+                        started_at=target_task.created_at if target_task.status == TaskStatus.EXECUTING else None,
+                        completed_at=target_task.completed_at,
+                    )
+                    self.task_repo.create(task_rec)
+                except Exception as exc:
+                    logger.debug("Database initial task insert notice for %s: %s", task_id, str(exc))
+
                 if target_task.status in TERMINAL_STATUSES:
                     payload = terminal_event_payload or {
                         "status": target_task.status.value,
@@ -222,7 +324,29 @@ class TaskService:
                 )
                 return False, current
 
-            # 4. Atomic state update
+            # 4. Atomic state update in SQLite database
+            try:
+                self.task_repo.transition_state(
+                    task_id=task_id,
+                    target_status=target_task.status,
+                    recovery_status=RecoveryStatus(target_task.recovery_status) if target_task.recovery_status else None,
+                    response_text=target_task.response_text,
+                    finish_reason=target_task.finish_reason,
+                    model=target_task.model,
+                    usage_json=json.dumps(target_task.usage) if target_task.usage else None,
+                    error=target_task.error,
+                    iterations=target_task.iterations,
+                    tool_calls_count=target_task.tool_calls_count,
+                    termination_reason=target_task.termination_reason,
+                    reason=terminal_event_payload.get("termination_reason") if terminal_event_payload else None,
+                )
+            except InvalidStateTransitionError as exc:
+                logger.warning("Rejected state transition by database constraint: %s", str(exc))
+                return False, current
+            except Exception as exc:
+                logger.debug("Database transition notice on task %s: %s", task_id, str(exc))
+
+            # 5. Atomic state update in memory
             self._tasks[task_id] = target_task
 
             # 5. Emit intermediate lifecycle event if supplied (e.g. TASK_CANCELLED)
@@ -379,6 +503,11 @@ class TaskService:
                 self._cancellation_tokens.pop(task_id, None)
                 self._task_loops.pop(task_id, None)
                 self._task_locks.pop(task_id, None)
+                self._cleaned_up_tasks.add(task_id)
+                try:
+                    self.task_repo.delete(task_id)
+                except Exception as exc:
+                    logger.debug("Database cleanup notice for task %s: %s", task_id, str(exc))
                 logger.info("Task %s and its associated resources were safely cleaned up", task_id)
                 return True
 
@@ -386,6 +515,18 @@ class TaskService:
         """Submit a prompt and process execution via the agent execution loop."""
         task_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
+
+        # Attach session if provided or ensure default workspace session
+        session_id = getattr(request, "session_id", None)
+        if not session_id:
+            try:
+                def_session = self.session_manager.get_or_create_default_session(
+                    workspace_path=str(self.workspace_context.root_path)
+                )
+                session_id = def_session.id
+            except Exception as exc:
+                logger.debug("Default session assignment notice: %s", str(exc))
+                session_id = None
 
         # Emit task_created lifecycle event
         self._record_event(
@@ -399,6 +540,7 @@ class TaskService:
             err_msg = "Model endpoint is unconfigured. Set AGENT_MODEL_BASE_URL to connect to vLLM."
             failed_task = TaskResponse(
                 task_id=task_id,
+                session_id=session_id,
                 prompt=request.prompt,
                 status=TaskStatus.FAILED,
                 error=err_msg,
@@ -413,17 +555,19 @@ class TaskService:
             )
             return stored_task
 
-        return await self._execute_with_loop(task_id, request, created_at)
+        return await self._execute_with_loop(task_id, request, created_at, session_id=session_id)
 
     async def _execute_with_loop(
         self,
         task_id: str,
         request: TaskCreateRequest,
         created_at: str,
+        session_id: Optional[str] = None,
     ) -> TaskResponse:
         """Execute task through the AgentLoop engine with cancellation and streaming."""
         executing_record = TaskResponse(
             task_id=task_id,
+            session_id=session_id,
             prompt=request.prompt,
             status=TaskStatus.EXECUTING,
             created_at=created_at,
@@ -470,6 +614,7 @@ class TaskService:
 
             final_task = TaskResponse(
                 task_id=task_id,
+                session_id=session_id,
                 prompt=request.prompt,
                 status=loop_result.status,
                 response_text=loop_result.final_response,
@@ -506,6 +651,7 @@ class TaskService:
             err_msg = "An unexpected internal error occurred during agent execution."
             failed_task = TaskResponse(
                 task_id=task_id,
+                session_id=session_id,
                 prompt=request.prompt,
                 status=TaskStatus.FAILED,
                 error=err_msg,
@@ -522,12 +668,50 @@ class TaskService:
 
     def get_task(self, task_id: str) -> Optional[TaskResponse]:
         """Retrieve stored task record by identifier under atomic lock."""
+        with self._registry_lock:
+            if task_id in self._cleaned_up_tasks:
+                return None
+
         lock = self._get_task_lock(task_id, create=False)
+        task = None
         if lock is None:
             with self._registry_lock:
-                return self._tasks.get(task_id)
-        with lock:
-            return self._tasks.get(task_id)
+                task = self._tasks.get(task_id)
+        else:
+            with lock:
+                task = self._tasks.get(task_id)
+
+        if task is not None:
+            return task
+
+        # Check durable SQLite storage if not present in memory (e.g. after restart)
+        try:
+            db_task = self.task_repo.get(task_id)
+            if db_task:
+                task_resp = TaskResponse(
+                    task_id=db_task.id,
+                    session_id=db_task.session_id,
+                    prompt=db_task.prompt,
+                    status=db_task.status,
+                    recovery_status=db_task.recovery_status.value if db_task.recovery_status else None,
+                    response_text=db_task.response_text,
+                    finish_reason=db_task.finish_reason,
+                    model=db_task.model,
+                    usage=json.loads(db_task.usage_json) if db_task.usage_json else None,
+                    error=db_task.error,
+                    iterations=db_task.iterations,
+                    tool_calls_count=db_task.tool_calls_count,
+                    termination_reason=db_task.termination_reason,
+                    created_at=db_task.created_at,
+                    completed_at=db_task.completed_at,
+                )
+                with self._registry_lock:
+                    self._tasks[task_id] = task_resp
+                return task_resp
+        except Exception as exc:
+            logger.debug("Error loading task %s from database: %s", task_id, str(exc))
+
+        return None
 
     def cancel_task(self, task_id: str) -> Optional[TaskResponse]:
         """Cancel an in-progress or queued task safely by signaling its cancellation token."""
@@ -614,6 +798,16 @@ class TaskService:
         except Exception as exc:
             logger.debug("ApprovalManager resolution notice for task %s call %s: %s", task_id, call_id, str(exc))
 
+        # Resolve in durable ApprovalRepository
+        try:
+            self.approval_repo.resolve(
+                call_id=call_id,
+                status=ApprovalStatus.APPROVED if approved else ApprovalStatus.DENIED,
+                decision_reason=reason,
+            )
+        except Exception as exc:
+            logger.debug("ApprovalRepository resolution notice for task %s call %s: %s", task_id, call_id, str(exc))
+
         # 2. Thread-safe internal record for task service
         with self._registry_lock:
             if task_id not in self._approvals:
@@ -631,6 +825,48 @@ class TaskService:
             payload={"call_id": call_id, "approved": approved, "reason": reason},
         )
         return True
+
+    def create_session(
+        self,
+        title: str,
+        workspace_path: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SessionRecord:
+        """Create and persist a new session."""
+        target_path = str(workspace_path) if workspace_path else str(self.workspace_context.root_path)
+        return self.session_manager.create_session(title=title, workspace_path=target_path, metadata=metadata)
+
+    def get_session(self, session_id: str) -> Optional[SessionRecord]:
+        """Retrieve a session by ID."""
+        return self.session_manager.get_session(session_id)
+
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> List[SessionRecord]:
+        """List sessions ordered by update timestamp descending."""
+        return self.session_manager.list_sessions(limit=limit, offset=offset)
+
+    def load_session_context(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Reconstruct full historical context for a session from durable SQLite store."""
+        return self.session_manager.load_session_context(session_id)
+
+    def set_workspace_root(self, new_root: Union[str, Path]) -> WorkspaceContext:
+        """Atomically update active workspace context and re-bind workspace tools."""
+        new_ctx = WorkspaceContext(
+            root_path=new_root,
+            max_file_size_bytes=self.settings.max_file_size_bytes,
+            max_read_bytes=self.settings.max_read_bytes,
+            max_directory_entries=self.settings.max_directory_entries,
+            max_search_results=self.settings.max_search_results,
+            max_write_bytes=self.settings.max_write_bytes,
+            max_edit_bytes=self.settings.max_edit_bytes,
+        )
+        self.workspace_context = new_ctx
+        from tools.registry_setup import get_all_workspace_tools
+        new_tools = get_all_workspace_tools(new_ctx)
+        for t in new_tools:
+            self.tool_registry.unregister(t.name)
+            self.tool_registry.register(t)
+        logger.info("Updated task service workspace root to: %s", new_ctx.root_path)
+        return new_ctx
 
 
 # Global task service instance

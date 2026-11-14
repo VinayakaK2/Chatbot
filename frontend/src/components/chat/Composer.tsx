@@ -5,11 +5,12 @@
  */
 
 import React, { useRef, useState, useEffect } from 'react'
-import type { AttachedFile } from '../../types/api'
+import type { AttachedFile, WorkspaceInfo } from '../../types/api'
 import { Dropdown } from '../common/Dropdown'
 import {
   IconChevronDown,
   IconFile,
+  IconFolder,
   IconPaperclip,
   IconSend,
   IconSparkles,
@@ -26,6 +27,8 @@ export interface ComposerProps {
   onSelectModel?: (model: string) => void
   placeholder?: string
   initialText?: string
+  currentWorkspace?: WorkspaceInfo | null
+  onOpenWorkspaceSelector?: () => void
 }
 
 const AVAILABLE_MODELS = [
@@ -51,6 +54,8 @@ export const Composer: React.FC<ComposerProps> = ({
   onSelectModel,
   placeholder,
   initialText,
+  currentWorkspace,
+  onOpenWorkspaceSelector,
 }) => {
   const [text, setText] = useState(initialText || '')
   const [attachments, setAttachments] = useState<AttachedFile[]>([])
@@ -272,6 +277,20 @@ export const Composer: React.FC<ComposerProps> = ({
             items={reasoningDropdownItems}
             align="left"
           />
+
+          {/* Phase 4 Workspace Scope Indicator & Quick Switcher */}
+          {currentWorkspace && (
+            <button
+              type="button"
+              className="composer-pill-btn composer-workspace-pill"
+              onClick={onOpenWorkspaceSelector}
+              title={`Active Workspace: ${currentWorkspace.root_path} (Click to switch folder)`}
+              aria-label="Active workspace folder"
+            >
+              <IconFolder size={12} color="var(--accent-primary)" />
+              <span className="pill-text">{currentWorkspace.name}</span>
+            </button>
+          )}
         </div>
 
         <div className="composer-controls-right">

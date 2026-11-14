@@ -79,8 +79,13 @@ class WorkspaceFileItem(BaseModel):
 
 
 def _get_workspace() -> WorkspaceContext:
-    """Retrieve workspace context bounded to current working directory."""
-    return WorkspaceContext(root_path=Path.cwd())
+    """Retrieve workspace context bounded to active TaskService or current working directory."""
+    try:
+        from core.task_service import get_task_service
+        return get_task_service().workspace_context
+    except Exception:
+        return WorkspaceContext(root_path=Path.cwd())
+
 
 
 def _detect_language(file_path: Path) -> str:

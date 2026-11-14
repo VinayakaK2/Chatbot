@@ -1,20 +1,30 @@
 /**
  * Settings Modal Component.
  * Workspace, model parameters, theme, and runtime configuration inspection.
+ * Enhanced with Phase 4 Workspace Filesystem Bounds and Tool Registry Status.
  */
 
 import React, { useState } from 'react'
-import type { HealthResponse, ModelReadinessResponse } from '../../types/api'
+import type { HealthResponse, ModelReadinessResponse, WorkspaceInfo } from '../../types/api'
 import { Button } from '../common/Button'
 import { Badge } from '../common/Badge'
-import { IconCheck, IconRefresh, IconSettings, IconX } from '../common/Icons'
+import {
+  IconCheck,
+  IconFolder,
+  IconFolderPlus,
+  IconRefresh,
+  IconSettings,
+  IconX,
+} from '../common/Icons'
 
 export interface SettingsModalProps {
   isOpen: boolean
   onClose: () => void
   health: HealthResponse | null
   readiness: ModelReadinessResponse | null
+  currentWorkspace?: WorkspaceInfo | null
   onRefreshHealth?: () => void
+  onOpenWorkspaceSelector?: () => void
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -22,7 +32,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   health,
   readiness,
+  currentWorkspace,
   onRefreshHealth,
+  onOpenWorkspaceSelector,
 }) => {
   const [maxTokens, setMaxTokens] = useState(2048)
   const [temperature, setTemperature] = useState(0.2)
@@ -51,15 +63,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div>
               <h2 className="modal-title">Workspace Settings</h2>
-              <p className="modal-subtitle">Runtime and Model Configuration</p>
+              <p className="modal-subtitle">Phase 4 Filesystem Confinement & Model Configuration</p>
             </div>
           </div>
-          <button type="button" className="modal-close-btn" onClick={onClose}>
+          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close settings">
             <IconX size={16} />
           </button>
         </div>
 
         <div className="modal-body settings-body">
+          {/* Phase 4 Workspace Confinement Section */}
+          <div className="settings-section">
+            <div className="settings-section-title">PHASE 4 WORKSPACE & CONFINEMENT</div>
+            <div className="settings-workspace-card">
+              <div className="settings-workspace-row">
+                <div className="settings-workspace-info">
+                  <div className="settings-workspace-name">
+                    <IconFolder size={16} color="var(--accent-primary)" />
+                    <span>{currentWorkspace?.name || 'Active Project Root'}</span>
+                    <Badge variant="success">Confinement Active</Badge>
+                  </div>
+                  <div className="settings-workspace-path" title={currentWorkspace?.root_path}>
+                    {currentWorkspace?.root_path || 'No workspace selected'}
+                  </div>
+                </div>
+                {onOpenWorkspaceSelector && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      onClose()
+                      onOpenWorkspaceSelector()
+                    }}
+                    leftIcon={<IconFolderPlus size={14} />}
+                  >
+                    Change Folder
+                  </Button>
+                )}
+              </div>
+
+              {/* Operational Limits Matrix */}
+              <div className="settings-limits-grid">
+                <div className="limit-item">
+                  <span className="limit-label">Max File Size:</span>
+                  <span className="limit-val">
+                    {Math.round((currentWorkspace?.limits?.max_file_size_bytes || 10485760) / (1024 * 1024))} MB
+                  </span>
+                </div>
+                <div className="limit-item">
+                  <span className="limit-label">Max Read Payload:</span>
+                  <span className="limit-val">
+                    {Math.round((currentWorkspace?.limits?.max_read_bytes || 262144) / 1024)} KB
+                  </span>
+                </div>
+                <div className="limit-item">
+                  <span className="limit-label">Directory Limit:</span>
+                  <span className="limit-val">
+                    {currentWorkspace?.limits?.max_directory_entries || 1000} entries
+                  </span>
+                </div>
+                <div className="limit-item">
+                  <span className="limit-label">Max Search Results:</span>
+                  <span className="limit-val">
+                    {currentWorkspace?.limits?.max_search_results || 200} matches
+                  </span>
+                </div>
+                <div className="limit-item">
+                  <span className="limit-label">Max Write Payload:</span>
+                  <span className="limit-val">
+                    {Math.round((currentWorkspace?.limits?.max_write_bytes || 5242880) / (1024 * 1024))} MB
+                  </span>
+                </div>
+                <div className="limit-item">
+                  <span className="limit-label">Max Edit Payload:</span>
+                  <span className="limit-val">
+                    {Math.round((currentWorkspace?.limits?.max_edit_bytes || 1048576) / (1024 * 1024))} MB
+                  </span>
+                </div>
+              </div>
+
+              {/* Registered Phase 4 Tools */}
+              {currentWorkspace?.tools && currentWorkspace.tools.length > 0 && (
+                <div className="settings-tools-list">
+                  <span className="tools-list-title">Registered Phase 4 Workspace Tools:</span>
+                  <div className="tools-badges-wrap">
+                    {currentWorkspace.tools.map((tool) => (
+                      <span key={tool.name} title={tool.description}>
+                        <Badge
+                          variant={tool.risk === 'workspace_write' ? 'warning' : 'neutral'}
+                        >
+                          {tool.name}
+                        </Badge>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Backend Diagnostics Section */}
           <div className="settings-section">
             <div className="settings-section-title">RUNTIME BACKEND STATUS</div>

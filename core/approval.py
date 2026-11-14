@@ -112,9 +112,14 @@ class ApprovalRequest(BaseModel):
 class ApprovalManager:
     """Thread-safe and asyncio-compatible in-memory manager for human tool execution approvals."""
 
-    def __init__(self, default_ttl_seconds: float = DEFAULT_APPROVAL_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        default_ttl_seconds: float = DEFAULT_APPROVAL_TTL_SECONDS,
+        approval_repo: Optional[Any] = None,
+    ) -> None:
         """Initialize in-memory volatile approval store with locking infrastructure."""
         self.default_ttl_seconds = default_ttl_seconds
+        self.approval_repo = approval_repo
         self._requests: Dict[str, ApprovalRequest] = {}
         # Task ID -> Call ID -> Request ID lookup
         self._task_call_map: Dict[str, Dict[str, str]] = {}
@@ -169,6 +174,26 @@ class ApprovalManager:
                 self._task_call_map[task_id] = {}
             self._task_call_map[task_id][call_id] = req_id
             self._events[req_id] = asyncio.Event()
+
+        if getattr(self, "approval_repo", None):
+            try:
+                from storage.models import ApprovalRecord
+                self.approval_repo.create(
+                    ApprovalRecord(
+                        id=req_id,
+                        task_id=task_id,
+                        call_id=call_id,
+                        tool_name=tool_name,
+                        risk_category=risk_category.value,
+                        action_hash=action_hash,
+                        status=request.status,
+                        reason=reason,
+                        requested_at=request.created_at,
+                        expires_at=request.expires_at,
+                    )
+                )
+            except Exception as exc:
+                logger.debug("Failed to persist approval request in DB: %s", str(exc))
 
         logger.info(
             "Created approval request '%s' for task '%s' call '%s' [tool=%s, risk=%s]",
@@ -254,6 +279,16 @@ class ApprovalManager:
             )
             self._requests[req_id] = updated
 
+            if getattr(self, "approval_repo", None):
+                try:
+                    self.approval_repo.resolve(
+                        call_id=req.call_id,
+                        status=target_status,
+                        decision_reason=reason,
+                    )
+                except Exception as exc:
+                    logger.debug("Failed to update approval resolution in DB: %s", str(exc))
+
             # Notify waiters
             ev = self._events.get(req_id)
             if ev:
@@ -330,6 +365,17 @@ class ApprovalManager:
                 }
             )
             self._requests[request_id] = consumed
+
+            if getattr(self, "approval_repo", None):
+                try:
+                    self.approval_repo.resolve(
+                        call_id=req.call_id,
+                        status=ApprovalStatus.CONSUMED,
+                        decision_reason="Token consumed by execution harness",
+                    )
+                except Exception as exc:
+                    logger.debug("Failed to update approval consumption in DB: %s", str(exc))
+
             logger.info("Consumed single-use approval token '%s'", request_id)
 
     def cancel_requests_for_task(self, task_id: str) -> List[ApprovalRequest]:
@@ -349,6 +395,15 @@ class ApprovalManager:
                     )
                     self._requests[req_id] = updated
                     cancelled.append(updated)
+                    if getattr(self, "approval_repo", None):
+                        try:
+                            self.approval_repo.resolve(
+                                call_id=req.call_id,
+                                status=ApprovalStatus.CANCELLED,
+                                decision_reason="Task cancelled by user",
+                            )
+                        except Exception as exc:
+                            logger.debug("Failed to update approval cancellation in DB: %s", str(exc))
                     ev = self._events.get(req_id)
                     if ev:
                         ev.set()

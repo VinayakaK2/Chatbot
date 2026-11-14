@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react'
-import type { Conversation, Project, HealthResponse, ModelReadinessResponse } from '../../types/api'
+import type { Conversation, Project, HealthResponse, ModelReadinessResponse, WorkspaceInfo } from '../../types/api'
 import {
   IconArchive,
   IconBot,
@@ -13,6 +13,7 @@ import {
   IconChevronRight,
   IconEdit,
   IconFolder,
+  IconFolderPlus,
   IconMoreVertical,
   IconPin,
   IconPlus,
@@ -42,6 +43,8 @@ export interface SidebarProps {
   readiness?: ModelReadinessResponse | null
   isHealthLoading?: boolean
   onRefreshHealth?: () => void
+  currentWorkspace?: WorkspaceInfo | null
+  onOpenWorkspaceSelector?: () => void
 }
 
 interface ConversationRowProps {
@@ -186,6 +189,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   isCollapsed,
   onToggleCollapse,
+  currentWorkspace,
+  onOpenWorkspaceSelector,
 }) => {
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -222,7 +227,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="brand-text">
             <span className="brand-title">Agent Runtime</span>
-            <span className="brand-subtitle">v0.1.0 • Workspace</span>
+            <button
+              type="button"
+              className="sidebar-workspace-pill"
+              onClick={onOpenWorkspaceSelector}
+              title={`Active Workspace: ${currentWorkspace?.root_path || 'Select folder'}`}
+              aria-label="Open Workspace Selector"
+            >
+              <IconFolder size={11} color="var(--accent-primary)" />
+              <span className="sidebar-workspace-name">{currentWorkspace?.name || 'Workspace'}</span>
+            </button>
           </div>
         </div>
 
@@ -299,7 +313,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Projects Folders Section */}
         {projects.length > 0 && (
           <div className="sidebar-section">
-            <div className="sidebar-section-title">PROJECTS</div>
+            <div className="sidebar-section-header-row">
+              <span className="sidebar-section-title">PROJECTS</span>
+              {onOpenWorkspaceSelector && (
+                <button
+                  type="button"
+                  className="sidebar-open-folder-btn"
+                  onClick={onOpenWorkspaceSelector}
+                  title="Select or change workspace folder"
+                  aria-label="Open workspace folder"
+                >
+                  <IconFolderPlus size={13} />
+                  <span>Open</span>
+                </button>
+              )}
+            </div>
             {projects.map((proj) => {
               const isExpanded = !!expandedProjects[proj.id]
               const projectChats = filteredConversations.filter(

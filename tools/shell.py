@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from core.tool_contracts import ToolDefinition, ToolRiskCategory
 from core.workspace import WorkspaceContext
+from tools.security import SECRET_PATTERNS, redact_secrets
 
 logger = logging.getLogger("agent_runtime.tools.shell")
 
@@ -48,16 +49,6 @@ SAFE_ENV_VARS: Set[str] = {
     "PROCESSOR_REVISION",
 }
 
-# Regex to detect API keys or bearer tokens in command output
-SECRET_PATTERNS: List[re.Pattern] = [
-    re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]{15,}", re.IGNORECASE),
-    re.compile(r"Basic\s+[a-zA-Z0-9+/=]{16,}", re.IGNORECASE),
-    re.compile(r"Authorization\s*:\s*[^\r\n]{8,}", re.IGNORECASE),
-    re.compile(r"(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[a-zA-Z0-9_\-\.]{16,}['\"]?", re.IGNORECASE),
-    re.compile(r"\bsk-[a-zA-Z0-9_\-]{20,}\b"),
-]
-
-
 class CommandExecutionResult(BaseModel):
     """Structured result returned by the PowerShell subprocess runner."""
 
@@ -69,26 +60,6 @@ class CommandExecutionResult(BaseModel):
     duration_ms: float = Field(default=0.0, description="Total execution time in milliseconds")
     truncated: bool = Field(default=False, description="Whether output exceeded maximum character limit")
     timed_out: bool = Field(default=False, description="Whether process exceeded timeout and was terminated")
-
-
-def redact_secrets(text: str, extra_secrets: Optional[List[str]] = None) -> str:
-    """Scan and redact known secrets and standard token formats from text."""
-    if not text:
-        return text
-
-    sanitized = text
-
-    # Redact explicit configured secrets
-    if extra_secrets:
-        for secret in extra_secrets:
-            if secret and len(secret) >= 8 and secret in sanitized:
-                sanitized = sanitized.replace(secret, "[REDACTED_SECRET]")
-
-    # Redact standard regex patterns
-    for pattern in SECRET_PATTERNS:
-        sanitized = pattern.sub("[REDACTED_SECRET]", sanitized)
-
-    return sanitized
 
 
 def get_sanitized_environment(workspace_root: str) -> Dict[str, str]:

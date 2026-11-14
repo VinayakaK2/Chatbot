@@ -13,6 +13,8 @@ import type {
   FileContentResponse,
   GitDiffResponse,
   WorkspaceFileItem,
+  WorkspaceInfo,
+  BrowseDirectoryResponse,
 } from '../types/api'
 
 // Base URL defaults to relative path in dev (handled by Vite reverse proxy) or env override
@@ -345,6 +347,101 @@ export const apiClient = {
         throw new Error(extractErrorMessage(res.status, body))
       }
       return body as WorkspaceFileItem[]
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      return []
+    }
+  },
+
+  /**
+   * Retrieve active Phase 4 workspace configuration, limits, and registered tools.
+   */
+  async getWorkspaceInfo(): Promise<WorkspaceInfo> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/workspace`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as WorkspaceInfo
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Failed to retrieve workspace configuration.')
+    }
+  },
+
+  /**
+   * Atomically switch or select active workspace root folder.
+   */
+  async selectWorkspace(path: string): Promise<WorkspaceInfo> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/workspace/select`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ path }),
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as WorkspaceInfo
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error(`Failed to switch workspace to '${path}'.`)
+    }
+  },
+
+  /**
+   * Browse subdirectories for folder selection dialog.
+   */
+  async browseDirectories(basePath?: string): Promise<BrowseDirectoryResponse> {
+    try {
+      const url = basePath
+        ? `${API_BASE_URL}/api/workspace/directories?base_path=${encodeURIComponent(basePath)}`
+        : `${API_BASE_URL}/api/workspace/directories`
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as BrowseDirectoryResponse
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error('Failed to browse directories.')
+    }
+  },
+
+  /**
+   * Retrieve recent workspaces list.
+   */
+  async getRecentWorkspaces(): Promise<string[]> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/workspace/recent`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as string[]
     } catch (err) {
       if (err instanceof Error) {
         throw err

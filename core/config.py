@@ -148,6 +148,23 @@ class Settings(BaseSettings):
         description="Maximum allowed token budget for individual tool outputs",
     )
 
+    # Persistence & SQLite State Recovery (Phase 7)
+    database_url: Optional[str] = Field(
+        default=None,
+        validation_alias="DATABASE_URL",
+        description="Path or URL for authoritative SQLite database storage (defaults to state.db in project root)",
+    )
+    database_busy_timeout_ms: int = Field(
+        default=5000,
+        validation_alias="DATABASE_BUSY_TIMEOUT_MS",
+        description="SQLite busy timeout in milliseconds for lock contention",
+    )
+    database_wal_mode: bool = Field(
+        default=True,
+        validation_alias="DATABASE_WAL_MODE",
+        description="Enable Write-Ahead Logging (WAL) mode for concurrent access",
+    )
+
     @field_validator("port")
     @classmethod
     def validate_port_range(cls, v: int) -> int:

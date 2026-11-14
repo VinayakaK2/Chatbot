@@ -14,6 +14,7 @@ import { PreviewPanel } from './components/layout/PreviewPanel'
 import { ApprovalModal } from './components/overlays/ApprovalModal'
 import { CommandPalette } from './components/overlays/CommandPalette'
 import { SettingsModal } from './components/overlays/SettingsModal'
+import { WorkspaceSelectorModal } from './components/overlays/WorkspaceSelectorModal'
 import { ToastContainer } from './components/overlays/ToastContainer'
 import { useConversations } from './hooks/useConversations'
 import { useTaskStream } from './hooks/useTaskStream'
@@ -36,6 +37,7 @@ import type {
   FileDiff,
   VerificationRecord,
   GitDiffResponse,
+  WorkspaceInfo,
 } from './types/api'
 
 const DEFAULT_PREVIEW_DIFF: FileDiff = {
@@ -103,6 +105,10 @@ export const App: React.FC = () => {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isWorkspaceSelectorOpen, setIsWorkspaceSelectorOpen] = useState(false)
+
+  // Phase 4 Workspace State
+  const [currentWorkspace, setCurrentWorkspace] = useState<WorkspaceInfo | null>(null)
 
   // Right Preview Targets
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactRecord | null>(null)
@@ -128,7 +134,43 @@ export const App: React.FC = () => {
     }
   }, [])
 
-  // Probes system health and model readiness from backend
+  // Probes active workspace information from backend
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const ws = await apiClient.getWorkspaceInfo()
+      setCurrentWorkspace(ws)
+    } catch {
+      setCurrentWorkspace({
+        root_path: 'H:\\chatbot',
+        name: 'chatbot',
+        exists: true,
+        is_git_repo: true,
+        current_branch: 'master',
+        total_files: 48,
+        limits: {
+          max_file_size_bytes: 10485760,
+          max_read_bytes: 262144,
+          max_directory_entries: 1000,
+          max_search_results: 200,
+          max_write_bytes: 5242880,
+          max_edit_bytes: 1048576,
+        },
+        tools: [],
+      })
+    }
+  }, [])
+
+  // Handles switching active workspace
+  const handleWorkspaceSelected = useCallback(
+    (newWs: WorkspaceInfo) => {
+      setCurrentWorkspace(newWs)
+      refreshGitDiff()
+      addToast(`Switched active workspace to ${newWs.name}`, 'info')
+    },
+    [refreshGitDiff, addToast]
+  )
+
+  // Probes system health, model readiness, and workspace configuration from backend
   const refreshSystemStatus = useCallback(async () => {
     setIsHealthLoading(true)
     try {
@@ -138,6 +180,7 @@ export const App: React.FC = () => {
       ])
       setHealth(h)
       setReadiness(r)
+      await refreshWorkspace()
       refreshGitDiff()
     } catch (err) {
       console.warn('System status probe notice:', err)
@@ -145,7 +188,7 @@ export const App: React.FC = () => {
     } finally {
       setIsHealthLoading(false)
     }
-  }, [addToast, refreshGitDiff])
+  }, [addToast, refreshGitDiff, refreshWorkspace])
 
   useEffect(() => {
     refreshSystemStatus()
@@ -636,6 +679,8 @@ export const App: React.FC = () => {
         readiness={readiness}
         isHealthLoading={isHealthLoading}
         onRefreshHealth={refreshSystemStatus}
+        currentWorkspace={currentWorkspace}
+        onOpenWorkspaceSelector={() => setIsWorkspaceSelectorOpen(true)}
       />
 
       {/* 2. Main Workspace Surface */}
@@ -724,6 +769,8 @@ export const App: React.FC = () => {
                     isGenerating={isExecuting}
                     selectedModel={activeModel}
                     placeholder="Ask a question or assign a software task..."
+                    currentWorkspace={currentWorkspace}
+                    onOpenWorkspaceSelector={() => setIsWorkspaceSelectorOpen(true)}
                   />
                 </div>
 
@@ -828,6 +875,8 @@ export const App: React.FC = () => {
                   onStopGeneration={cancelActiveTask}
                   isGenerating={isExecuting}
                   selectedModel={activeModel}
+                  currentWorkspace={currentWorkspace}
+                  onOpenWorkspaceSelector={() => setIsWorkspaceSelectorOpen(true)}
                 />
               </div>
             </div>
@@ -895,7 +944,17 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         health={health}
         readiness={readiness}
+        currentWorkspace={currentWorkspace}
         onRefreshHealth={refreshSystemStatus}
+        onOpenWorkspaceSelector={() => setIsWorkspaceSelectorOpen(true)}
+      />
+
+      {/* Phase 4 Workspace Selector & Confinement Modal */}
+      <WorkspaceSelectorModal
+        isOpen={isWorkspaceSelectorOpen}
+        onClose={() => setIsWorkspaceSelectorOpen(false)}
+        currentWorkspace={currentWorkspace}
+        onWorkspaceSelected={handleWorkspaceSelected}
       />
 
       {/* Toast Notifications */}

@@ -26,6 +26,12 @@ from core.context_models import (
     MandatoryContextOverflowError,
 )
 from model.contracts import ModelError, ModelProvider, ModelResponse
+from storage.models import ExecutionState, ModelCallRecord, TranscriptMessageRecord
+from storage.repositories import (
+    ModelCallRepository,
+    ToolExecutionRepository,
+    TranscriptRepository,
+)
 
 logger = logging.getLogger("agent_runtime.core.agent_loop")
 
@@ -257,13 +263,42 @@ class AgentLoop:
         registry: Optional[ToolRegistry] = None,
         context_manager: Optional[ContextManager] = None,
         budget_config: Optional[ContextBudgetConfig] = None,
+        tool_execution_repo: Optional[ToolExecutionRepository] = None,
+        model_call_repo: Optional[ModelCallRepository] = None,
+        transcript_repo: Optional[TranscriptRepository] = None,
     ) -> None:
-        """Initialize the agent loop with model provider, tool dispatcher, registry, and context manager."""
+        """Initialize the agent loop with model provider, tool dispatcher, registry, context manager, and storage repos."""
         self.model_provider = model_provider
         self.registry = registry or get_global_registry()
         self.dispatcher = dispatcher or ToolDispatcher(registry=self.registry)
         self.context_manager = context_manager or ContextManager(budget_config)
         self.budget_config = budget_config or self.context_manager.default_budget
+        self.tool_execution_repo = tool_execution_repo
+        self.model_call_repo = model_call_repo
+        self.transcript_repo = transcript_repo
+
+    def _record_transcript_msg(self, task_id: str, msg: AgentMessage, seq_num: int) -> None:
+        """Persist a message turn to the durable transcript if repository is configured."""
+        if not self.transcript_repo:
+            return
+        try:
+            tool_calls_json = None
+            if msg.tool_calls:
+                tool_calls_json = json.dumps([tc.model_dump() for tc in msg.tool_calls])
+            self.transcript_repo.append(
+                TranscriptMessageRecord(
+                    id=str(uuid.uuid4()),
+                    task_id=task_id,
+                    sequence_num=seq_num,
+                    role=msg.role,
+                    content=msg.content,
+                    name=msg.name,
+                    tool_call_id=msg.tool_call_id,
+                    tool_calls_json=tool_calls_json,
+                )
+            )
+        except Exception as exc:
+            logger.debug("Failed to record transcript message for task %s: %s", task_id, str(exc))
 
     def _emit_event(
         self,
@@ -302,6 +337,11 @@ class AgentLoop:
             history.extend(request.initial_messages)
         else:
             history.append(AgentMessage.create_user(request.prompt))
+
+        seq_counter = 0
+        for m in history:
+            self._record_transcript_msg(request.task_id, m, seq_counter)
+            seq_counter += 1
 
         # 2. Export Model-Facing Tool Schemas
         tool_schemas = self.registry.export_model_schemas(allowed_names=request.allowed_tools)
@@ -433,6 +473,7 @@ class AgentLoop:
                 },
             )
 
+            model_call_start = time.perf_counter()
             try:
                 model_response = await self.model_provider.generate(
                     prompt=request.prompt,  # fallback for single-prompt adapters
@@ -469,6 +510,25 @@ class AgentLoop:
                     error=f"Internal model execution error: {str(exc)}",
                     termination_reason="internal_error",
                 )
+
+            model_latency_ms = (time.perf_counter() - model_call_start) * 1000.0
+            if self.model_call_repo:
+                try:
+                    self.model_call_repo.record(
+                        ModelCallRecord(
+                            id=str(uuid.uuid4()),
+                            task_id=request.task_id,
+                            iteration=iterations,
+                            model=model_response.model or "unknown",
+                            prompt_tokens=model_response.usage.get("prompt_tokens", 0) if model_response.usage else 0,
+                            completion_tokens=model_response.usage.get("completion_tokens", 0) if model_response.usage else 0,
+                            total_tokens=model_response.usage.get("total_tokens", 0) if model_response.usage else 0,
+                            finish_reason=model_response.finish_reason,
+                            latency_ms=model_latency_ms,
+                        )
+                    )
+                except Exception as exc:
+                    logger.debug("Failed to record model call telemetry for task %s: %s", request.task_id, str(exc))
 
             last_model_id = model_response.model
             if model_response.usage:
@@ -510,7 +570,10 @@ class AgentLoop:
 
                 logger.info("AgentLoop completed successfully on turn %d", iterations)
                 sanitized_text = sanitize_greeting_response(request.prompt, model_response.text)
-                history.append(AgentMessage.create_assistant(content=sanitized_text))
+                final_assistant_msg = AgentMessage.create_assistant(content=sanitized_text)
+                history.append(final_assistant_msg)
+                self._record_transcript_msg(request.task_id, final_assistant_msg, seq_counter)
+                seq_counter += 1
                 return AgentExecutionResult(
                     task_id=request.task_id,
                     status=TaskStatus.COMPLETED,
@@ -579,6 +642,8 @@ class AgentLoop:
                 tool_calls=tool_call_records,
             )
             history.append(assistant_msg)
+            self._record_transcript_msg(request.task_id, assistant_msg, seq_counter)
+            seq_counter += 1
 
             # 3.9 Sequential Tool Dispatch & Result Collection
             for tc in tool_call_records:
@@ -615,6 +680,22 @@ class AgentLoop:
                     {"call_id": tc.id, "tool_name": tc.name},
                 )
 
+                is_mutation = tc.name in ("write_file", "edit_file", "execute_command")
+                idempotent = tc.name in ("read_file", "read_file_range", "list_directory", "search_files", "find_files")
+                if self.tool_execution_repo:
+                    try:
+                        self.tool_execution_repo.record_started(
+                            task_id=request.task_id,
+                            call_id=tc.id,
+                            tool_name=tc.name,
+                            arguments=tc.raw_arguments,
+                            is_mutation=is_mutation,
+                            idempotent=idempotent,
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to record tool start in repository for task %s: %s", request.task_id, str(exc))
+
+                tool_start_time = time.perf_counter()
                 envelope = await self.dispatcher.dispatch(
                     tool_name=tc.name,
                     arguments=tc.raw_arguments,
@@ -626,6 +707,22 @@ class AgentLoop:
                         "event_sink": lambda event_type, payload: self._emit_event(request, event_type, payload),
                     },
                 )
+                tool_duration_ms = (time.perf_counter() - tool_start_time) * 1000.0
+
+                if self.tool_execution_repo:
+                    try:
+                        exit_code = envelope.metadata.get("exit_code") if envelope.metadata else None
+                        self.tool_execution_repo.record_completed(
+                            call_id=tc.id,
+                            state=ExecutionState.COMPLETED if envelope.success else ExecutionState.FAILED,
+                            exit_code=exit_code,
+                            result_output=envelope.output,
+                            error=envelope.error,
+                            error_category=envelope.error_category,
+                            duration_ms=tool_duration_ms,
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to record tool completion in repository for task %s: %s", request.task_id, str(exc))
 
                 total_tool_calls += 1
 
@@ -668,5 +765,7 @@ class AgentLoop:
                     result=envelope,
                 )
                 history.append(result_msg)
+                self._record_transcript_msg(request.task_id, result_msg, seq_counter)
+                seq_counter += 1
 
             # Loop repeats to feed updated conversation back to the model

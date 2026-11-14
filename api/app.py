@@ -9,7 +9,9 @@ from fastapi.responses import JSONResponse
 
 from api.routes.files import router as files_router
 from api.routes.health import router as health_router
+from api.routes.sessions import router as sessions_router
 from api.routes.tasks import router as tasks_router
+from api.routes.workspace import router as workspace_router
 from core.config import Settings, get_settings
 from core.logging_config import setup_logging
 from core.task_service import TaskService, get_task_service
@@ -45,8 +47,10 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     # Register Routers
     app.include_router(health_router)
+    app.include_router(sessions_router)
     app.include_router(tasks_router)
     app.include_router(files_router)
+    app.include_router(workspace_router)
 
     # Custom Exception Handlers
     @app.exception_handler(RequestValidationError)

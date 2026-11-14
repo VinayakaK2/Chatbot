@@ -281,6 +281,48 @@ export interface Conversation {
 }
 
 // ==============================================================================
+// Phase 4 Workspace Schemas
+// ==============================================================================
+
+export interface WorkspaceLimits {
+  max_file_size_bytes: number
+  max_read_bytes: number
+  max_directory_entries: number
+  max_search_results: number
+  max_write_bytes: number
+  max_edit_bytes: number
+}
+
+export interface WorkspaceToolInfo {
+  name: string
+  risk: string
+  description: string
+}
+
+export interface WorkspaceInfo {
+  root_path: string
+  name: string
+  exists: boolean
+  is_git_repo: boolean
+  current_branch?: string
+  total_files: number
+  limits: WorkspaceLimits
+  tools: WorkspaceToolInfo[]
+}
+
+export interface DirectoryItem {
+  name: string
+  path: string
+  is_dir: boolean
+}
+
+export interface BrowseDirectoryResponse {
+  current_path: string
+  parent_path?: string | null
+  directories: DirectoryItem[]
+}
+
+// ==============================================================================
 // API Error Schemas
 // ==============================================================================
 
