@@ -215,11 +215,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       continue
     }
 
-    // Suppress robotic greeting headers and status banner boilerplate (e.g. "> Status: Online...", "Greetings!")
+    // Suppress robotic greeting headers, status banner boilerplate, or boot status lines
     const trimmed = line.trim()
     if (
       /^(>?\s*Status:\s*(Online|Ready|Idle|Active|Operational|Available).*)$/i.test(trimmed) ||
-      /^(#{1,6}\s+)?Greetings!?$/i.test(trimmed)
+      /^(#{1,6}\s+)?(Greetings!?|Ready for Development|System Initialized.*|Capabilities & Operations.*)$/i.test(trimmed) ||
+      /^I am configured and ready to assist.*established protocol.*$/i.test(trimmed) ||
+      /^System initialized and operating according to.*$/i.test(trimmed)
     ) {
       continue
     }

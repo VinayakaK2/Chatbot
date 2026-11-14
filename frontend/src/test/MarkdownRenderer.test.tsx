@@ -94,10 +94,12 @@ describe('MarkdownRenderer Component', () => {
   })
 
   it('suppresses robotic greeting headers and status banner boilerplate', () => {
-    const noisyMd = '### Greetings!\n> Status: Online and ready to assist.\n\nHello! How can I help you today?'
+    const noisyMd = '### Greetings!\nReady for Development\nSystem Initialized & Ready\n> Status: Online and ready to assist.\n\nHello! How can I help you today?'
     render(<MarkdownRenderer content={noisyMd} />)
 
     expect(screen.queryByText('Greetings!')).toBeNull()
+    expect(screen.queryByText('Ready for Development')).toBeNull()
+    expect(screen.queryByText(/System Initialized/)).toBeNull()
     expect(screen.queryByText(/Status: Online/)).toBeNull()
     expect(screen.getByText('Hello! How can I help you today?')).toBeDefined()
   })
