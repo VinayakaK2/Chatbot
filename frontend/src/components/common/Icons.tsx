@@ -108,9 +108,9 @@ export const IconFolder: React.FC<IconProps> = ({ size = 18, className = '', col
 )
 
 export const IconPin: React.FC<IconProps> = ({ size = 18, className = '', color = 'currentColor' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <line x1="12" x2="12" y1="17" y2="22" />
-    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <line x1="12" y1="17" x2="12" y2="22" />
+    <path d="M5 17h14v-2l-2-2V5h1V3H6v2h1v8l-2 2v2z" />
   </svg>
 )
 

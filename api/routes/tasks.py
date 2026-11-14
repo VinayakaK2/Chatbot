@@ -137,9 +137,7 @@ async def stream_task_events(
 
         # Listen for real-time events via an async queue
         queue: asyncio.Queue[Optional[RuntimeEvent]] = asyncio.Queue()
-        if task_id not in task_service._event_queues:
-            task_service._event_queues[task_id] = []
-        task_service._event_queues[task_id].append(queue)
+        task_service.subscribe_events(task_id, queue, loop=asyncio.get_running_loop())
 
         try:
             while True:
@@ -158,9 +156,7 @@ async def stream_task_events(
                     # Send periodic keep-alive comment
                     yield ": ping\n\n"
         finally:
-            if task_id in task_service._event_queues:
-                if queue in task_service._event_queues[task_id]:
-                    task_service._event_queues[task_id].remove(queue)
+            task_service.unsubscribe_events(task_id, queue)
 
     return StreamingResponse(
         event_generator(),

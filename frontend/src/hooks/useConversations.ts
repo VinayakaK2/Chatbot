@@ -218,6 +218,7 @@ export function useConversations() {
 
   return {
     conversations,
+    setConversations,
     projects,
     activeConversation,
     activeConversationId,

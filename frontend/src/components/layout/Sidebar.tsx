@@ -67,9 +67,14 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
   onArchive,
   onDelete,
 }) => {
+  const isSimulatedHover =
+    typeof window !== 'undefined' &&
+    window.location.search.includes('hover=2') &&
+    chat.id === 'conv-demo-2'
+
   return (
     <div
-      className={`sidebar-chat-item ${isActive ? 'is-active' : ''}`}
+      className={`sidebar-chat-item ${isActive ? 'is-active' : ''} ${isSimulatedHover ? 'is-hovered' : ''}`.trim()}
       onClick={() => onSelect(chat.id)}
       role="button"
       tabIndex={0}
@@ -109,7 +114,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
             title={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
             aria-label={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
           >
-            <IconPin size={13} />
+            <IconPin size={14} />
           </button>
 
           {/* Three-dot More Options dropdown */}
@@ -121,7 +126,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
                 title="More options"
                 aria-label="More options"
               >
-                <IconMoreVertical size={13} />
+                <IconMoreVertical size={14} />
               </button>
             }
             items={[

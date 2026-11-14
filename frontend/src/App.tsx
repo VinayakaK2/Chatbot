@@ -30,6 +30,7 @@ import type {
   HealthResponse,
   ModelReadinessResponse,
   Message,
+  Conversation,
   AttachedFile,
   ToolActivity,
   ArtifactRecord,
@@ -78,6 +79,7 @@ export const App: React.FC = () => {
     addMessageToActive,
     updateMessageInActive,
     clearActiveConversation,
+    setConversations,
   } = useConversations()
 
   // Task Execution & Live Event Streaming Hook
@@ -137,7 +139,61 @@ export const App: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const demo = params.get('demo')
-    if (demo !== 'active' && demo !== 'tools' && demo !== 'preview' && demo !== 'working' && demo !== 'conversational') return
+    if (
+      demo !== 'active' &&
+      demo !== 'tools' &&
+      demo !== 'preview' &&
+      demo !== 'working' &&
+      demo !== 'conversational' &&
+      demo !== 'settings' &&
+      demo !== 'sidebar'
+    )
+      return
+
+    if (demo === 'sidebar') {
+      const demoList: Conversation[] = [
+        {
+          id: 'conv-demo-1',
+          title: 'hi',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          project_id: 'proj-default',
+          pinned: false,
+          archived: false,
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          messages: [],
+        },
+        {
+          id: 'conv-demo-2',
+          title: 'Inspect repository architecture and trace key service interfaces',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          project_id: 'proj-default',
+          pinned: false,
+          archived: false,
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          messages: [],
+        },
+        {
+          id: 'conv-demo-3',
+          title: 'Implement backend verification endpoints',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          project_id: 'proj-default',
+          pinned: false,
+          archived: false,
+          model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
+          messages: [],
+        },
+      ]
+      setConversations(demoList)
+      return
+    }
+
+    if (demo === 'settings') {
+      setIsSettingsOpen(true)
+      return
+    }
 
     if (demo === 'conversational') {
       const convMessages: Message[] = [
