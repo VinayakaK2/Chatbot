@@ -136,6 +136,42 @@ MIGRATIONS: List[Tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
         """,
     ),
+    (
+        2,
+        "002_immutability_triggers_and_continuations",
+        """
+        -- Add parent_task_id to tasks for linked continuation tasks across recovery
+        ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_tasks_parent_task ON tasks(parent_task_id);
+
+        -- Database-level trigger: Abort status updates on terminal tasks
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_status_update
+        BEFORE UPDATE OF status ON tasks
+        FOR EACH ROW
+        WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')
+        BEGIN
+            SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable and cannot be updated');
+        END;
+
+        -- Database-level trigger: Abort illegal transitions from pending
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_pending_transition
+        BEFORE UPDATE OF status ON tasks
+        FOR EACH ROW
+        WHEN OLD.status = 'pending' AND NEW.status NOT IN ('executing', 'cancelled', 'failed')
+        BEGIN
+            SELECT RAISE(ABORT, 'Illegal database state transition: pending tasks may only transition to executing, cancelled, or failed');
+        END;
+
+        -- Database-level trigger: Abort illegal transitions from executing
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_executing_transition
+        BEFORE UPDATE OF status ON tasks
+        FOR EACH ROW
+        WHEN OLD.status = 'executing' AND NEW.status NOT IN ('completed', 'failed', 'cancelled', 'limit_reached')
+        BEGIN
+            SELECT RAISE(ABORT, 'Illegal database state transition: executing tasks may only transition to terminal states');
+        END;
+        """,
+    ),
 ]
 
 

@@ -6,25 +6,26 @@
 
 :root {
   /* =====================================================
-     SURFACE LAYERS — True Pure Dark (Black & White Theme / Antigravity reference)
+     SURFACE LAYERS — Exact User Specification & Reference Image
+     Workspace: #070708 | Sidebar: #121216 | Elevated: #131317 - #18181e
      ===================================================== */
-  --bg-app: #000000;
-  /* pure black base */
-  --bg-sidebar: #000000;
-  /* sidebar — pitch black */
-  --bg-workspace: #000000;
-  /* main conversation area — pitch black */
-  --bg-elevated: #111111;
+  --bg-app: #070708;
+  /* base dark container — exact user spec */
+  --bg-sidebar: #121216;
+  /* sidebar — exact color sampled from user reference image */
+  --bg-workspace: #070708;
+  /* main conversation area — exact user spec */
+  --bg-elevated: #131317;
   /* primary elevated surface (composer, cards) */
-  --bg-elevated-2: #161616;
+  --bg-elevated-2: #18181e;
   /* second lifted level (modals, dropdowns) */
-  --bg-elevated-3: #1f1f1f;
+  --bg-elevated-3: #1f1f26;
   /* third level (tooltips, highlights) */
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-hover-strong: rgba(255, 255, 255, 0.09);
-  --bg-active: rgba(255, 255, 255, 0.08);
-  --bg-input: #121212;
-  --bg-code: #0a0a0a;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-hover-strong: rgba(255, 255, 255, 0.095);
+  --bg-active: rgba(255, 255, 255, 0.085);
+  --bg-input: #121216;
+  --bg-code: #0b0b0e;
 
   /* Legacy aliases kept for compat */
   --bg-surface-elevated: var(--bg-elevated);
@@ -32,34 +33,34 @@
   --bg-surface-tertiary: var(--bg-elevated-3);
 
   /* =====================================================
-     BORDERS — Ultra-fine monochrome glass hairline borders
+     BORDERS — Enhanced visible hairlines (enhanced lines on dark black)
      ===================================================== */
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-hover: rgba(255, 255, 255, 0.16);
-  --border-focus: rgba(255, 255, 255, 0.25);
-  --border-muted: rgba(255, 255, 255, 0.04);
+  --border-color: rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.22);
+  --border-focus: rgba(255, 255, 255, 0.35);
+  --border-muted: rgba(255, 255, 255, 0.06);
 
   /* =====================================================
-     TYPOGRAPHY PALETTE — High legibility monochrome white/silver
+     TYPOGRAPHY PALETTE — Enhanced high contrast & legibility
      ===================================================== */
-  --text-primary: #ffffff;
-  /* pure white */
-  --text-secondary: #999999;
-  /* neutral light gray */
-  --text-muted: #666666;
-  /* neutral medium gray */
-  --text-placeholder: #444444;
-  --text-inverse: #000000;
+  --text-primary: #f4f4f6;
+  /* crisp white for high contrast */
+  --text-secondary: #a1a1aa;
+  /* neutral light silver */
+  --text-muted: #71717a;
+  /* visible secondary labels & timestamps */
+  --text-placeholder: #52525b;
+  --text-inverse: #070708;
 
   /* =====================================================
      ACCENT — Monochrome Pure White / Light Neutral
      ===================================================== */
   --accent-primary: #ffffff;
-  --accent-hover: #e5e5e5;
-  --accent-subtle: rgba(255, 255, 255, 0.08);
-  --accent-border: rgba(255, 255, 255, 0.18);
-  --accent-glow: rgba(255, 255, 255, 0.15);
+  --accent-hover: #e5e5e7;
+  --accent-subtle: rgba(255, 255, 255, 0.09);
+  --accent-border: rgba(255, 255, 255, 0.20);
+  --accent-glow: rgba(255, 255, 255, 0.18);
 
   /* =====================================================
      FILES, DIFFS & ANALYSIS — The ONLY place where Blue is used
@@ -67,7 +68,7 @@
      ===================================================== */
   --color-file-text: #60a5fa;
   --color-file-bg: rgba(59, 130, 246, 0.12);
-  --color-file-border: rgba(59, 130, 246, 0.25);
+  --color-file-border: rgba(59, 130, 246, 0.26);
   --color-file-hover: #93c5fd;
 
   --color-analysis-text: #60a5fa;

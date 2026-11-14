@@ -67,7 +67,10 @@ class SessionRepository:
         self.db = db
 
     def create(self, session: SessionRecord) -> SessionRecord:
-        """Persist a new session record."""
+        """Persist a new session record with secret scrubbing."""
+        clean_title = redact_secrets(session.title)
+        clean_meta = redact_secrets(session.metadata_json) if session.metadata_json else None
+
         with self.db.transaction() as conn:
             conn.execute(
                 """
@@ -76,15 +79,15 @@ class SessionRepository:
                 """,
                 (
                     session.id,
-                    session.title,
+                    clean_title,
                     session.workspace_path,
                     session.status.value,
-                    session.metadata_json,
+                    clean_meta,
                     session.created_at,
                     session.updated_at,
                 ),
             )
-        return session
+        return self.get(session.id)
 
     def create_session(
         self,
@@ -162,30 +165,36 @@ class TaskRepository:
         self.db = db
 
     def create(self, task: TaskRecord) -> TaskRecord:
-        """Create and persist a new task record with transition audit logging."""
+        """Create and persist a new task record with transition audit logging and secret scrubbing."""
+        clean_prompt = redact_secrets(task.prompt)
+        clean_resp = redact_secrets(task.response_text) if task.response_text else None
+        clean_err = redact_secrets(task.error) if task.error else None
+        clean_term = redact_secrets(task.termination_reason) if task.termination_reason else None
+
         with self.db.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO tasks (
-                    id, session_id, prompt, status, recovery_status, response_text,
+                    id, session_id, parent_task_id, prompt, status, recovery_status, response_text,
                     finish_reason, model, usage_json, error, iterations, tool_calls_count,
                     termination_reason, created_at, started_at, completed_at, version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     task.id,
                     task.session_id,
-                    task.prompt,
+                    task.parent_task_id,
+                    clean_prompt,
                     task.status.value,
                     task.recovery_status.value if task.recovery_status else None,
-                    task.response_text,
+                    clean_resp,
                     task.finish_reason,
                     task.model,
                     task.usage_json,
-                    task.error,
+                    clean_err,
                     task.iterations,
                     task.tool_calls_count,
-                    task.termination_reason,
+                    clean_term,
                     task.created_at,
                     task.started_at,
                     task.completed_at,
@@ -209,7 +218,7 @@ class TaskRepository:
                     task.created_at,
                 ),
             )
-        return task
+        return self.get(task.id)
 
     def get(self, task_id: str) -> Optional[TaskRecord]:
         """Retrieve task record by ID."""
@@ -311,15 +320,19 @@ class TaskRepository:
             completed_at = now_iso if target_status in TERMINAL_TASK_STATUSES else current["completed_at"]
             started_at = now_iso if (target_status == TaskStatus.EXECUTING and not current["started_at"]) else current["started_at"]
 
-            final_response = response_text if response_text is not None else current["response_text"]
+            raw_response = response_text if response_text is not None else current["response_text"]
+            final_response = redact_secrets(raw_response) if raw_response else None
             final_finish_reason = finish_reason if finish_reason is not None else current["finish_reason"]
             final_model = model if model is not None else current["model"]
             final_usage = usage_json if usage_json is not None else current["usage_json"]
-            final_error = error if error is not None else current["error"]
+            raw_error = error if error is not None else current["error"]
+            final_error = redact_secrets(raw_error) if raw_error else None
             final_iterations = iterations if iterations is not None else current["iterations"]
             final_tool_count = tool_calls_count if tool_calls_count is not None else current["tool_calls_count"]
-            final_termination = termination_reason if termination_reason is not None else current["termination_reason"]
+            raw_termination = termination_reason if termination_reason is not None else current["termination_reason"]
+            final_termination = redact_secrets(raw_termination) if raw_termination else None
             final_recovery = recovery_status.value if recovery_status is not None else current["recovery_status"]
+            clean_transition_reason = redact_secrets(reason or f"Transition to {target_status.value}")
 
             cursor.execute(
                 """
@@ -369,7 +382,7 @@ class TaskRepository:
                     task_id,
                     current_status.value,
                     target_status.value,
-                    reason or f"Transition to {target_status.value}",
+                    clean_transition_reason,
                     actor,
                     now_iso,
                 ),
@@ -445,7 +458,10 @@ class TranscriptRepository:
         self.db = db
 
     def append(self, message: TranscriptMessageRecord) -> TranscriptMessageRecord:
-        """Persist a message turn to the transcript."""
+        """Persist a message turn to the transcript with secret scrubbing."""
+        clean_content = redact_secrets(message.content) if message.content else None
+        clean_tool_calls = redact_secrets(message.tool_calls_json) if message.tool_calls_json else None
+
         with self.db.transaction() as conn:
             conn.execute(
                 """
@@ -460,10 +476,10 @@ class TranscriptRepository:
                     message.task_id,
                     message.sequence_num,
                     message.role.value,
-                    message.content,
+                    clean_content,
                     message.name,
                     message.tool_call_id,
-                    message.tool_calls_json,
+                    clean_tool_calls,
                     1 if message.is_derived else 0,
                     message.created_at,
                 ),
@@ -801,7 +817,10 @@ class ApprovalRepository:
         self.db = db
 
     def create(self, approval: ApprovalRecord) -> ApprovalRecord:
-        """Persist an approval request record."""
+        """Persist an approval request record with secret scrubbing."""
+        clean_reason = redact_secrets(approval.reason) if approval.reason else None
+        clean_decision_reason = redact_secrets(approval.decision_reason) if approval.decision_reason else None
+
         with self.db.transaction() as conn:
             conn.execute(
                 """
@@ -818,8 +837,8 @@ class ApprovalRepository:
                     approval.risk_category,
                     approval.action_hash,
                     approval.status.value,
-                    approval.reason,
-                    approval.decision_reason,
+                    clean_reason,
+                    clean_decision_reason,
                     approval.requested_at,
                     approval.expires_at,
                     approval.decided_at,
@@ -875,13 +894,14 @@ class ApprovalRepository:
         status: ApprovalStatus,
         decision_reason: Optional[str] = None,
     ) -> Optional[ApprovalRecord]:
-        """Update approval record decision."""
+        """Update approval record decision with secret scrubbing."""
+        clean_decision_reason = redact_secrets(decision_reason) if decision_reason else None
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.db.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE approvals SET status = ?, decision_reason = ?, decided_at = ? WHERE call_id = ? OR id = ?;",
-                (status.value, decision_reason, now_iso, call_id, call_id),
+                (status.value, clean_decision_reason, now_iso, call_id, call_id),
             )
         return self.get_by_call_id(call_id)
 
@@ -907,17 +927,17 @@ class ApprovalRepository:
             return cursor.rowcount > 0
 
     def invalidate_pending_approvals(self, reason: str = "process_restart") -> int:
-        """Expire all pending approvals across restart. No grants survive process termination."""
+        """Expire all pending and approved-unconsumed approvals across restart. No grants survive process termination."""
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.db.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE approvals SET status = 'expired', decision_reason = ?, decided_at = ? WHERE status = 'pending';",
+                "UPDATE approvals SET status = 'expired', decision_reason = ?, decided_at = ? WHERE status IN ('pending', 'approved');",
                 (f"Invalidated on {reason}", now_iso),
             )
             count = cursor.rowcount
             if count > 0:
-                logger.info("Invalidated %d stale pending approvals due to %s", count, reason)
+                logger.info("Invalidated %d stale pending/approved authorizations due to %s", count, reason)
         return count
 
     expire_all_pending = invalidate_pending_approvals

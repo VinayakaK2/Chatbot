@@ -12,7 +12,7 @@ from typing import Generator
 
 from api.schemas.tasks import TaskStatus
 from storage.database import DatabaseManager
-from storage.migrations import MigrationRunner
+from storage.migrations import MigrationRunner, MIGRATIONS
 from storage.models import (
     ApprovalRecord,
     ExecutionState,
@@ -95,7 +95,7 @@ def test_migration_runner_idempotency(temp_db: DatabaseManager) -> None:
     # Verify migration table record
     with temp_db.connection() as conn:
         migrations = conn.execute("SELECT version, description FROM schema_migrations;").fetchall()
-        assert len(migrations) == 1
+        assert len(migrations) == len(MIGRATIONS)
         assert migrations[0]["description"] == "001_initial_schema"
 
 

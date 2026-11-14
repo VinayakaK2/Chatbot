@@ -9,9 +9,12 @@ import type { Conversation, Project, HealthResponse, ModelReadinessResponse, Wor
 import {
   IconArchive,
   IconBot,
+  IconBriefcase,
   IconChevronDown,
   IconChevronRight,
+  IconClock,
   IconEdit,
+  IconFilter,
   IconFolder,
   IconFolderPlus,
   IconMoreVertical,
@@ -45,6 +48,27 @@ export interface SidebarProps {
   onRefreshHealth?: () => void
   currentWorkspace?: WorkspaceInfo | null
   onOpenWorkspaceSelector?: () => void
+}
+
+function formatCompactTime(isoString?: string): string {
+  if (!isoString) return ''
+  try {
+    const date = new Date(isoString)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    if (diffMs < 0) return 'now'
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMins / 60)
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffMins < 1) return 'now'
+    if (diffMins < 60) return `${diffMins}m`
+    if (diffHours < 24) return `${diffHours}h`
+    if (diffDays < 30) return `${diffDays}d`
+    return `${Math.floor(diffDays / 30)}mo`
+  } catch {
+    return ''
+  }
 }
 
 interface ConversationRowProps {
@@ -95,13 +119,15 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
 
       {/* Trailing area: Actions (hover/focus) vs Status Indicator (normal) */}
       <div className="chat-item-trailing">
-        {/* Status Indicator (Shown in normal state when mouse NOT hovering) */}
+        {/* Status Indicator or Relative Timestamp (Shown in normal state when mouse NOT hovering) */}
         <div className="chat-status-indicator" aria-hidden="true">
           {isRunning ? (
             <span className="chat-spinner" title="Task running" />
           ) : isUnread ? (
             <span className="chat-unread-dot" title="Unread updates" />
-          ) : null}
+          ) : (
+            <span className="chat-item-time">{formatCompactTime(chat.updated_at || chat.created_at)}</span>
+          )}
         </div>
 
         {/* Action Controls (Revealed on hover / focus) */}
@@ -277,8 +303,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="sidebar-new-chat-btn"
           onClick={() => onNewConversation()}
         >
-          <IconPlus size={16} />
+          <IconPlus size={15} />
           <span>New Conversation</span>
+        </button>
+      </div>
+
+      {/* Navigation Links: Automations & Customizations (Image reference) */}
+      <div className="sidebar-nav-list">
+        <button
+          type="button"
+          className="sidebar-nav-item"
+          onClick={onOpenSettings}
+          title="Automations"
+        >
+          <IconClock size={15} />
+          <span>Automations</span>
+        </button>
+        <button
+          type="button"
+          className="sidebar-nav-item"
+          onClick={onOpenSettings}
+          title="Customizations"
+        >
+          <IconBriefcase size={15} />
+          <span>Customizations</span>
         </button>
       </div>
 
@@ -314,19 +362,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {projects.length > 0 && (
           <div className="sidebar-section">
             <div className="sidebar-section-header-row">
-              <span className="sidebar-section-title">PROJECTS</span>
-              {onOpenWorkspaceSelector && (
+              <span className="sidebar-section-title">Projects</span>
+              <div className="sidebar-section-actions">
                 <button
                   type="button"
-                  className="sidebar-open-folder-btn"
-                  onClick={onOpenWorkspaceSelector}
-                  title="Select or change workspace folder"
-                  aria-label="Open workspace folder"
+                  className="sidebar-section-icon-btn"
+                  onClick={() => setIsSearchOpen((prev) => !prev)}
+                  title="Filter / Search conversations"
+                  aria-label="Filter conversations"
                 >
-                  <IconFolderPlus size={13} />
-                  <span>Open</span>
+                  <IconFilter size={13} />
                 </button>
-              )}
+                {onOpenWorkspaceSelector && (
+                  <button
+                    type="button"
+                    className="sidebar-section-icon-btn"
+                    onClick={onOpenWorkspaceSelector}
+                    title="Open workspace folder"
+                    aria-label="Open workspace folder"
+                  >
+                    <IconFolderPlus size={13} />
+                  </button>
+                )}
+              </div>
             </div>
             {projects.map((proj) => {
               const isExpanded = !!expandedProjects[proj.id]
@@ -348,8 +406,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     ) : (
                       <IconChevronRight size={14} />
                     )}
-                    <IconFolder size={14} color="var(--accent-primary)" />
-                    <span className="project-name">{proj.name}</span>
+                    <IconFolder size={14} color="var(--color-file-text, #60a5fa)" />
+                    <span className="project-name project-name-blue">{proj.name}</span>
                     <span className="project-count">{projectChats.length}</span>
                   </div>
 

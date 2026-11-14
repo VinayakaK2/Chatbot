@@ -95,6 +95,7 @@ class TaskRecord(BaseModel):
 
     id: str = Field(..., description="Unique UUID for the task")
     session_id: Optional[str] = Field(default=None, description="Owning session UUID")
+    parent_task_id: Optional[str] = Field(default=None, description="Linked parent task UUID if continuation")
     prompt: str = Field(..., description="Original user prompt")
     status: TaskStatus = Field(..., description="Current state machine status")
     recovery_status: Optional[RecoveryStatus] = Field(default=None)
@@ -247,4 +248,5 @@ class RecoverySummary(BaseModel):
     needs_review_count: int = Field(default=0)
     failed_count: int = Field(default=0)
     stale_approvals_invalidated: int = Field(default=0)
+    continuation_task_ids: List[str] = Field(default_factory=list)
     details: List[Dict[str, Any]] = Field(default_factory=list)

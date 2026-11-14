@@ -46,6 +46,10 @@ class TaskCreateRequest(BaseModel):
         default=None,
         description="Optional session UUID to which this task belongs",
     )
+    parent_task_id: Optional[str] = Field(
+        default=None,
+        description="Optional parent task UUID if this is a continuation task",
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -64,6 +68,10 @@ class TaskResponse(BaseModel):
     session_id: Optional[str] = Field(
         default=None,
         description="Optional session UUID to which this task belongs",
+    )
+    parent_task_id: Optional[str] = Field(
+        default=None,
+        description="Optional parent task UUID if this is a continuation task",
     )
     prompt: str = Field(..., description="The original submitted prompt")
     status: TaskStatus = Field(..., description="Current execution status of the task")
