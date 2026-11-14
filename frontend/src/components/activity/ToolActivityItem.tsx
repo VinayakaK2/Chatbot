@@ -105,6 +105,13 @@ export const ToolActivityItem: React.FC<ToolActivityItemProps> = ({
     ? activity.file_path.split('/').pop() || activity.file_path
     : ''
 
+  const isFileActivity =
+    !!activity.file_path ||
+    parsed.prefix === 'Analyzed' ||
+    parsed.prefix === 'Edited' ||
+    parsed.prefix === 'Created' ||
+    /\b[\w\-./\\]+\.(py|ts|tsx|js|json|md|css|html)\b/i.test(parsed.label)
+
   const handleToggle = () => {
     setIsExpanded((prev) => !prev)
     if (onInspectArtifact && activity.file_path) {
@@ -129,7 +136,7 @@ export const ToolActivityItem: React.FC<ToolActivityItemProps> = ({
         <div className="antigravity-tool-line">
           <span className="tool-prefix">{parsed.prefix}</span>
           {parsed.icon && <span className="tool-icon">{parsed.icon}</span>}
-          <span className="tool-label">{parsed.label}</span>
+          <span className={`tool-label ${isFileActivity ? 'tool-file-blue' : ''}`}>{parsed.label}</span>
           {parsed.lineRange && <span className="tool-line-range">{parsed.lineRange}</span>}
           {parsed.hasChevron &&
             (isExpanded ? (

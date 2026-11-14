@@ -788,7 +788,7 @@ export const App: React.FC = () => {
                     }
                   >
                     <div className="suggestion-icon-wrap">
-                      <IconSearch size={14} color="var(--color-info)" />
+                      <IconSearch size={14} color="var(--text-secondary)" />
                     </div>
                     <div className="suggestion-content">
                       <span className="suggestion-title">Explore Architecture</span>
@@ -808,7 +808,7 @@ export const App: React.FC = () => {
                     }
                   >
                     <div className="suggestion-icon-wrap">
-                      <IconTerminal size={14} color="var(--color-warning)" />
+                      <IconTerminal size={14} color="var(--text-secondary)" />
                     </div>
                     <div className="suggestion-content">
                       <span className="suggestion-title">Run Test Suite</span>
@@ -828,7 +828,7 @@ export const App: React.FC = () => {
                     }
                   >
                     <div className="suggestion-icon-wrap">
-                      <IconFileCode size={14} color="var(--accent-primary)" />
+                      <IconFileCode size={14} color="var(--text-secondary)" />
                     </div>
                     <div className="suggestion-content">
                       <span className="suggestion-title">Implement Endpoint</span>
@@ -848,7 +848,7 @@ export const App: React.FC = () => {
                     }
                   >
                     <div className="suggestion-icon-wrap">
-                      <IconShieldAlert size={14} color="var(--color-danger)" />
+                      <IconShieldAlert size={14} color="var(--text-secondary)" />
                     </div>
                     <div className="suggestion-content">
                       <span className="suggestion-title">Audit Policy Gate</span>

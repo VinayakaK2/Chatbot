@@ -12,6 +12,16 @@ export interface MarkdownRendererProps {
   isStreaming?: boolean
 }
 
+// Detect file references, paths, and git refs for specialized blue styling (Image 1 reference)
+const FILE_EXT_REGEX = /\b[\w\-./\\]+\.(py|ts|tsx|js|jsx|json|md|css|html|yaml|yml|sh|toml|sql|env|txt|c|cpp|h|rs|go|rb|php)\b/i
+const DIR_PATH_REGEX = /^(tests|api|core|frontend|storage|tools|docs|src|lib|components|utils|hooks)\/[\w\-./\\]+/i
+const GIT_REF_REGEX = /^(origin\/[\w\-]+|commit\s+[0-9a-f]{6,40}|[0-9a-f]{7,40})$/i
+
+function isFileOrCodeRef(val: string): boolean {
+  const trimmed = val.trim()
+  return FILE_EXT_REGEX.test(trimmed) || DIR_PATH_REGEX.test(trimmed) || GIT_REF_REGEX.test(trimmed)
+}
+
 // Inline token rendering for bold, italic, inline code, and links
 function renderInlineFormatting(text: string): React.ReactNode[] {
   // Regex matches: inline code, bold (**, __), italic (*, _), strikethrough (~~), markdown link [text](url)
@@ -29,9 +39,28 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
 
     const token = match[0]
     if (token.startsWith('`') && token.endsWith('`')) {
+      const codeContent = token.slice(1, -1)
+      const isFile = isFileOrCodeRef(codeContent)
       nodes.push(
-        <code key={match.index} className="inline-code">
-          {token.slice(1, -1)}
+        <code
+          key={match.index}
+          className={`inline-code ${isFile ? 'inline-code-file' : ''}`.trim()}
+          onClick={
+            isFile
+              ? (e) => {
+                  e.stopPropagation()
+                  window.dispatchEvent(
+                    new CustomEvent('open-workspace-file', {
+                      detail: { path: codeContent, title: codeContent.split('/').pop() || codeContent },
+                    })
+                  )
+                }
+              : undefined
+          }
+          style={isFile ? { cursor: 'pointer' } : undefined}
+          title={isFile ? `Click to inspect: ${codeContent}` : undefined}
+        >
+          {codeContent}
         </code>
       )
     } else if (
@@ -63,6 +92,8 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
       const linkUrl = match[3]
       const isFileLink =
         linkUrl.startsWith('file:///') ||
+        isFileOrCodeRef(linkText) ||
+        isFileOrCodeRef(linkUrl) ||
         linkUrl.endsWith('.md') ||
         linkUrl.endsWith('.py') ||
         linkUrl.endsWith('.ts') ||
@@ -91,7 +122,7 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
           onClick={handleClick}
           target={isFileLink ? undefined : '_blank'}
           rel={isFileLink ? undefined : 'noopener noreferrer'}
-          className="markdown-link"
+          className={`markdown-link ${isFileLink ? 'markdown-file-link' : ''}`.trim()}
           title={isFileLink ? `Open in File Viewer: ${linkUrl}` : linkUrl}
         >
           {linkText}
