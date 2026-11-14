@@ -82,6 +82,19 @@ class TestToolOutputBounding:
         # Verify explicit truncation marker with exit code
         assert "[Output truncated from" in bounded
         assert "exit_code=1" in bounded
+        assert estimate_tokens(bounded) <= 200
+
+    def test_bounded_output_never_exceeds_max_tokens_budget(self) -> None:
+        """Verify that bounded output estimated tokens strictly never exceeds the requested max_tokens."""
+        huge_payload = "def test_metrics():\n    assert True\n" * 2000
+        for tok_limit in [64, 100, 200, 500, 1000, 2000]:
+            bounded, truncated, _ = bound_text_content(
+                huge_payload,
+                max_tokens=tok_limit,
+                metadata={"exit_code": 0},
+            )
+            assert truncated is True
+            assert estimate_tokens(bounded) <= tok_limit
 
 
 class TestDeterministicAssembly:

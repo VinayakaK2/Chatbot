@@ -72,8 +72,22 @@ def bound_text_content(
     if orig_tokens <= max_tokens:
         return text, False, orig_len
 
-    # Approximate max character budget from token limit
-    char_budget = max(200, int(max_tokens * ESTIMATOR_CHARS_PER_TOKEN * 0.9))
+    meta_str = ""
+    if metadata and "exit_code" in metadata:
+        meta_str = f"; exit_code={metadata['exit_code']}"
+
+    # Target maximum characters derived by inverting the conservative token estimator:
+    # chars <= (max_tokens / ESTIMATOR_SAFETY_FACTOR - ESTIMATOR_BASE_OVERHEAD) * ESTIMATOR_CHARS_PER_TOKEN
+    target_max_chars = int(
+        (max_tokens / ESTIMATOR_SAFETY_FACTOR - ESTIMATOR_BASE_OVERHEAD) * ESTIMATOR_CHARS_PER_TOKEN
+    )
+    if target_max_chars < 50:
+        target_max_chars = 50
+
+    # Reserve estimated character length for the truncation marker (~85 chars)
+    marker_len_approx = 85 + len(meta_str)
+    char_budget = max(20, target_max_chars - marker_len_approx)
+
     if orig_len <= char_budget:
         return text, False, orig_len
 
@@ -83,12 +97,14 @@ def bound_text_content(
     head_part = text[:head_chars]
     tail_part = text[-tail_chars:] if tail_chars > 0 else ""
 
-    meta_str = ""
-    if metadata and "exit_code" in metadata:
-        meta_str = f"; exit_code={metadata['exit_code']}"
-
     marker = f"\n\n... [Output truncated from {orig_len} chars to ~{char_budget} chars{meta_str}] ...\n\n"
     bounded = f"{head_part}{marker}{tail_part}"
+
+    # Strict invariant guard: ensure bounded output never exceeds max_tokens
+    while estimate_tokens(bounded) > max_tokens and len(tail_part) > 10:
+        tail_part = tail_part[:-20]
+        bounded = f"{head_part}{marker}{tail_part}"
+
     return bounded, True, orig_len
 
 

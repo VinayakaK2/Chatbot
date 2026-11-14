@@ -16,8 +16,8 @@ In Phase 6, the test suite reports:
 - **460 passed, 1 skipped** (461 collected tests).
 
 ### Reconciliation Equation
-$$\text{Phase 6 Collected Tests} = \text{Phase 5 Baseline (439)} + \text{Phase 6 Dedicated Tests (21)} + \text{Phase 6 Config Test (1)} = \mathbf{461}$$
-$$\text{Phase 6 Passed Tests} = \text{Phase 5 Passed (438)} + \text{Phase 6 Dedicated Tests (21)} + \text{Phase 6 Config Test (1)} = \mathbf{460}$$
+$$\text{Phase 6 Collected Tests} = \text{Phase 5 Baseline (439)} + \text{Phase 6 Dedicated Tests (22)} + \text{Phase 6 Config Test (1)} = \mathbf{462}$$
+$$\text{Phase 6 Passed Tests} = \text{Phase 5 Passed (438)} + \text{Phase 6 Dedicated Tests (22)} + \text{Phase 6 Config Test (1)} = \mathbf{461}$$
 $$\text{Phase 6 Skipped Tests} = \text{Phase 5 Skipped (1)} = \mathbf{1}$$
 
 Every single test from Phase 0 through Phase 5 passed without modification or failure.
@@ -39,7 +39,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 | `tests/test_approval.py` | 10 | 10 | 0 | Phase 5 volatile approval manager |
 | `tests/test_config.py` | 20 | **21** | **+1** | Added `test_context_management_settings_default_and_custom` |
 | `tests/test_context_adversarial.py` | 0 | **9** | **+9** | **NEW** Phase 6 adversarial test suite |
-| `tests/test_context_manager.py` | 0 | **12** | **+12** | **NEW** Phase 6 unit test suite |
+| `tests/test_context_manager.py` | 0 | **13** | **+13** | **NEW** Phase 6 unit test suite (including F6-01 invariant test) |
 | `tests/test_filesystem.py` | 14 | 14 | 0 | Filesystem core operations |
 | `tests/test_filesystem_integration.py` | 14 | 14 | 0 | Workspace filesystem integration |
 | `tests/test_live_server.py` | 1 | 1 | 0 | Live server binding |
@@ -54,7 +54,7 @@ Generated via `pytest --collect-only -q --ignore=tests/test_smoke_live.py`:
 | `tests/test_tool_dispatcher.py` | 14 | 14 | 0 | Tool dispatcher execution |
 | `tests/test_tool_registry.py` | 20 | 20 | 0 | Registry lookup & auto-registration |
 | `tests/test_workspace_security.py` | 24 | 24 | 0 | 23 passed, 1 skipped (Windows symlink) |
-| **TOTALS** | **439** | **461** | **+22** | **460 passed, 1 skipped in 17.94s** |
+| **TOTALS** | **439** | **462** | **+23** | **461 passed, 1 skipped in 36.51s** |
 
 ---
 
