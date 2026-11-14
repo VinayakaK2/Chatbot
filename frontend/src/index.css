@@ -41,6 +41,9 @@
   height: 100%;
   overflow: hidden;
   position: relative;
+  background:
+    radial-gradient(ellipse 70% 45% at 50% -5%, rgba(99, 102, 241, 0.05), transparent 75%),
+    var(--bg-workspace);
 }
 
 /* ==========================================================================
@@ -123,7 +126,7 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  transition: transform 120ms var(--ease-spring), color var(--transition-fast), background-color var(--transition-fast);
   flex-shrink: 0;
 }
 
@@ -131,6 +134,10 @@
 .sidebar-header-btn.is-active {
   background-color: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.sidebar-header-btn:active {
+  transform: scale(0.92);
 }
 
 .sidebar-collapse-btn {
@@ -144,13 +151,17 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  transition: transform 120ms var(--ease-spring), color var(--transition-fast), background-color var(--transition-fast);
   flex-shrink: 0;
 }
 
 .sidebar-collapse-btn:hover {
   background-color: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.sidebar-collapse-btn:active {
+  transform: scale(0.92);
 }
 
 /* New Conversation Button — simple text link with icon, like Claude "New" */
@@ -160,22 +171,35 @@
 
 .sidebar-new-chat-btn {
   width: 100%;
-  height: 36px;
+  height: 38px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 9px;
+  padding: 0 12px;
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 13.5px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  color: var(--text-primary);
+  font-size: 13px;
   font-weight: 500;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  word-spacing: 0.03em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform 140ms var(--ease-spring),
+              background-color 140ms ease,
+              border-color 140ms ease,
+              color 140ms ease;
   cursor: pointer;
 }
 
 .sidebar-new-chat-btn:hover {
-  background-color: var(--bg-hover);
-  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  transform: translateY(-0.5px);
+}
+
+.sidebar-new-chat-btn:active {
+  transform: scale(0.975);
 }
 
 /* Search — slim, low-contrast */
@@ -288,9 +312,9 @@
   flex-direction: column;
 }
 
-/* Conversation items — no borders, like Claude/AGY */
+/* Conversation items — polished, sleek like Claude/AGY */
 .sidebar-chat-item {
-  height: 34px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -299,9 +323,14 @@
   color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  border: 1px solid transparent;
+  word-spacing: 0.025em;
+  transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 100ms ease;
   position: relative;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .sidebar-chat-item:hover,
@@ -311,9 +340,15 @@
 }
 
 .sidebar-chat-item.is-active {
-  background-color: var(--bg-hover-strong);
-  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
   font-weight: 500;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-chat-item:active {
+  transform: scale(0.99);
 }
 
 .chat-item-title {
@@ -668,110 +703,138 @@
   gap: 0;
 }
 
-/* Simple refined emblem glyph */
+/* Refined glowing emblem glyph */
 .hero-emblem-box {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  width: 54px;
+  height: 54px;
+  border-radius: 17px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.18), rgba(168, 85, 247, 0.12));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px -4px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.22);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 22px;
-  transition: all var(--transition-fast);
+  color: var(--accent-hover);
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 220ms ease,
+              color 220ms ease;
 }
 
 .hero-emblem-box:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 14px 36px -4px rgba(99, 102, 241, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: #a5b4fc;
 }
 
-/* Title — large, clean, like AGY "Good to see you" */
+/* Title — clean, gradient typography with optical balance */
 .hero-title {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 600;
-  color: var(--text-primary);
   letter-spacing: -0.025em;
+  word-spacing: 0.025em;
   line-height: 1.25;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  background: linear-gradient(180deg, #ffffff 40%, rgba(255, 255, 255, 0.72) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-wrap: balance;
 }
 
 .hero-subtitle {
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--text-secondary);
-  line-height: 1.6;
-  max-width: 480px;
-  margin-bottom: 28px;
+  line-height: 1.65;
+  word-spacing: 0.04em;
+  max-width: 540px;
+  margin-bottom: 30px;
+  text-wrap: balance;
 }
 
 .hero-composer-box {
   width: 100%;
   max-width: var(--composer-max-width);
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
-/* Starter suggestions — sleek subtle cards, not heavy SaaS blocks */
+/* Starter suggestions — sleek luxury glass cards with butter-smooth tactile press */
 .hero-suggestions-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  gap: 12px;
   width: 100%;
   max-width: var(--composer-max-width);
 }
 
 .hero-suggestion-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius-md);
-  padding: 10px 14px;
+  padding: 13px 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   cursor: pointer;
   text-align: left;
-  transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hero-suggestion-card:hover {
-  background: var(--bg-hover);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* "Makhan" click interaction — tactile spring response */
+.hero-suggestion-card:active {
+  transform: scale(0.98) translateY(0);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transition: transform 70ms ease, box-shadow 70ms ease;
 }
 
 .suggestion-icon-wrap {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), background-color 180ms ease;
 }
 
 .hero-suggestion-card:hover .suggestion-icon-wrap {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.09);
+  transform: scale(1.08);
 }
 
 .suggestion-content {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
 .suggestion-title {
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
+  word-spacing: 0.025em;
 }
 
 .suggestion-desc {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  word-spacing: 0.035em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -797,18 +860,21 @@
 }
 
 .composer-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
+  background: rgba(20, 22, 29, 0.78);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.085);
   border-radius: var(--radius-composer);
-  padding: 12px 14px 10px 14px;
+  padding: 15px 18px 12px 18px;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-composer);
-  transition: border-color var(--transition-fast);
+  box-shadow: 0 16px 40px -6px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms var(--ease-spring);
 }
 
 .composer-card:focus-within {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 20px 48px -6px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 /* Attachment chips */
@@ -826,7 +892,7 @@
   background: var(--bg-elevated-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 3px 7px;
+  padding: 3px 8px;
   font-size: 11.5px;
   color: var(--text-secondary);
 }
@@ -845,6 +911,7 @@
   display: flex;
   align-items: center;
   color: var(--text-muted);
+  transition: color var(--transition-fast);
 }
 
 .chip-remove-btn:hover {
@@ -859,17 +926,19 @@
   outline: none;
   resize: none;
   color: var(--text-primary);
-  font-size: 14.5px;
+  font-size: 15px;
   font-family: var(--font-sans);
   line-height: 1.6;
-  min-height: 36px;
-  max-height: 220px;
+  word-spacing: 0.035em;
+  min-height: 42px;
+  max-height: 240px;
   caret-color: var(--accent-hover);
 }
 
 .composer-textarea::placeholder {
   color: var(--text-placeholder);
-  font-size: 14px;
+  font-size: 14.5px;
+  word-spacing: 0.04em;
 }
 
 .composer-textarea:disabled {
@@ -881,32 +950,38 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 8px;
-  gap: 6px;
+  margin-top: 10px;
+  gap: 8px;
 }
 
 .composer-controls-left,
 .composer-controls-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 /* Bare icon button — paperclip */
 .composer-btn-icon {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  transition: color 150ms var(--ease-spring),
+              background-color 150ms ease,
+              transform 80ms ease;
 }
 
 .composer-btn-icon:hover {
   color: var(--text-secondary);
-  background-color: var(--bg-hover);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.composer-btn-icon:active {
+  transform: scale(0.94);
 }
 
 .composer-btn-icon:disabled {
@@ -914,27 +989,38 @@
   cursor: not-allowed;
 }
 
-/* Model/effort pill selector buttons */
+/* Model/effort pill selector buttons — luxury capsules with spring hover/active */
 .composer-pill-btn {
-  height: 28px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  padding: 0 11px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 9999px; /* modern capsule pill */
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: 12px;
   font-family: var(--font-sans);
   font-weight: 500;
+  word-spacing: 0.025em;
   cursor: pointer;
-  transition: color var(--transition-fast), background-color var(--transition-fast);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: color 150ms var(--ease-spring),
+              background-color 150ms ease,
+              border-color 150ms ease,
+              transform 80ms ease;
 }
 
 .composer-pill-btn:hover {
-  background-color: var(--bg-hover);
+  background-color: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.14);
   color: var(--text-primary);
+  transform: translateY(-0.5px);
+}
+
+.composer-pill-btn:active {
+  transform: scale(0.96) translateY(0);
 }
 
 .composer-pill-btn:disabled {
@@ -951,15 +1037,19 @@
 
 /* Send button — accent, circular feel */
 .composer-send-btn {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--bg-elevated-2);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
-  transition: all var(--transition-fast);
+  transition: transform 160ms var(--ease-spring),
+              background-color 160ms ease,
+              box-shadow 160ms ease,
+              color 160ms ease;
   flex-shrink: 0;
 }
 
@@ -967,23 +1057,30 @@
 .composer-send-btn.active {
   background: var(--text-primary);
   color: var(--bg-app);
+  border-color: transparent;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(255, 255, 255, 0.22);
 }
 
 .composer-send-btn:disabled {
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
 .composer-send-btn.is-active:hover,
 .composer-send-btn.active:hover {
-  background: rgba(255, 255, 255, 0.88);
+  background: #ffffff;
+  transform: scale(1.06);
+  box-shadow: 0 6px 18px rgba(255, 255, 255, 0.3);
+}
+
+.composer-send-btn:active {
+  transform: scale(0.94);
 }
 
 .composer-send-btn.generating {
   background: var(--bg-elevated-3);
   color: var(--color-warning);
-  cursor: pointer;
 }
 
 .composer-send-btn.generating:hover {
@@ -993,22 +1090,30 @@
 
 /* Stop button */
 .composer-stop-btn {
-  height: 32px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 0 12px;
-  background: var(--bg-elevated-2);
-  border-radius: var(--radius-btn);
-  color: var(--text-secondary);
-  font-size: 12.5px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 9999px;
+  color: #f87171;
+  font-size: 12px;
   font-weight: 500;
-  transition: all var(--transition-fast);
+  cursor: pointer;
+  transition: all 150ms var(--ease-spring);
 }
 
 .composer-stop-btn:hover {
-  background: var(--bg-elevated-3);
-  color: var(--text-primary);
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  transform: translateY(-0.5px);
+}
+
+.composer-stop-btn:active {
+  transform: scale(0.96);
 }
 
 /* ==========================================================================
@@ -1061,12 +1166,13 @@
   border-radius: 18px;
   padding: 12px 18px;
   color: var(--text-primary);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .user-message-body {
   font-size: 14px;
   line-height: 1.6;
+  word-spacing: 0.035em;
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -1280,6 +1386,7 @@
   font-family: var(--font-sans);
   font-size: 14.5px;
   line-height: 1.72;
+  word-spacing: 0.035em;
   color: var(--text-primary);
   word-break: break-word;
   overflow-wrap: break-word;
@@ -2698,8 +2805,17 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: all var(--transition-fast);
+  word-spacing: 0.02em;
+  transition: transform 120ms var(--ease-spring),
+              background-color 150ms ease,
+              border-color 150ms ease,
+              box-shadow 150ms ease,
+              color 150ms ease;
   outline: none;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.975);
 }
 
 .btn-sm {
@@ -3659,15 +3775,31 @@
   transition: background-color 0.12s ease, color 0.12s ease;
 }
 
+.panel-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: transform 120ms var(--ease-spring), background-color 0.15s ease, color 0.15s ease;
+}
+
 .panel-tool-btn:hover {
   background-color: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
+.panel-tool-btn:active {
+  transform: scale(0.92);
+}
+
 .panel-tool-toggle-btn {
   width: 28px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-secondary);
 }
 
@@ -3677,17 +3809,21 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: transform 120ms var(--ease-spring), background-color 0.15s ease, color 0.15s ease;
 }
 
 .header-toggle-sidebar-btn:hover {
   background-color: rgba(255, 255, 255, 0.08);
   color: #fff;
+}
+
+.header-toggle-sidebar-btn:active {
+  transform: scale(0.92);
 }
 
 .header-toggle-sidebar-btn.is-active {

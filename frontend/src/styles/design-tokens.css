@@ -6,25 +6,25 @@
 
 :root {
   /* =====================================================
-     SURFACE LAYERS — Layered Dark Cement/Graphite
+     SURFACE LAYERS — Space Obsidian & Layered Graphite (Antigravity & Linear inspired)
      ===================================================== */
-  --bg-app: #080808;
-  /* base workspace bg */
-  --bg-sidebar: #111213;
-  /* sidebar — deeper black like Claude/AGY */
-  --bg-workspace: #030303;
+  --bg-app: #08090c;
+  /* base dark container */
+  --bg-sidebar: #0c0d12;
+  /* sidebar — velvety deep dark */
+  --bg-workspace: #0e0f15;
   /* main conversation area */
-  --bg-elevated: #222427;
-  /* slightly lifted surface */
-  --bg-elevated-2: #282B2E;
-  /* second lifted level */
-  --bg-elevated-3: #2F3236;
-  /* third level, popover, etc. */
+  --bg-elevated: #161720;
+  /* primary elevated surface (composer, cards) */
+  --bg-elevated-2: #1c1e28;
+  /* second lifted level (modals, dropdowns) */
+  --bg-elevated-3: #232634;
+  /* third level (tooltips, highlights) */
   --bg-hover: rgba(255, 255, 255, 0.055);
   --bg-hover-strong: rgba(255, 255, 255, 0.09);
   --bg-active: rgba(255, 255, 255, 0.08);
-  --bg-input: #1E2022;
-  --bg-code: #1A1C1E;
+  --bg-input: #14151e;
+  --bg-code: #12131c;
 
   /* Legacy aliases kept for compat */
   --bg-surface-elevated: var(--bg-elevated);
@@ -32,54 +32,56 @@
   --bg-surface-tertiary: var(--bg-elevated-3);
 
   /* =====================================================
-     BORDERS — Barely visible, like Claude/ChatGPT
+     BORDERS — Ultra-fine, subtle glass hairline borders
      ===================================================== */
-  --border-color: #2E3134;
-  --border-subtle: #232527;
-  --border-hover: #3D4145;
-  --border-focus: rgba(99, 102, 241, 0.6);
-  --border-muted: #26282B;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --border-focus: rgba(99, 102, 241, 0.5);
+  --border-muted: rgba(255, 255, 255, 0.04);
 
   /* =====================================================
-     TYPOGRAPHY PALETTE
+     TYPOGRAPHY PALETTE — High legibility, crisp silver tones
      ===================================================== */
-  --text-primary: #ECEDEE;
-  /* near white, slightly warm */
-  --text-secondary: #9B9EA3;
-  --text-muted: #6B6F75;
-  --text-placeholder: #585C62;
-  --text-inverse: #0E0F10;
+  --text-primary: #f8fafc;
+  /* crisp white */
+  --text-secondary: #94a3b8;
+  /* soft cool slate */
+  --text-muted: #64748b;
+  /* subtle label slate */
+  --text-placeholder: #475569;
+  --text-inverse: #090a0d;
 
   /* =====================================================
      ACCENT & SEMANTIC
      ===================================================== */
-  --accent-primary: #6366F1;
+  --accent-primary: #6366f1;
   /* indigo */
-  --accent-hover: #818CF8;
+  --accent-hover: #818cf8;
   --accent-subtle: rgba(99, 102, 241, 0.12);
   --accent-border: rgba(99, 102, 241, 0.3);
 
-  --color-success: #22C55E;
+  --color-success: #22c55e;
   --color-success-bg: rgba(34, 197, 94, 0.10);
   --color-success-border: rgba(34, 197, 94, 0.25);
 
-  --color-warning: #F59E0B;
+  --color-warning: #f59e0b;
   --color-warning-bg: rgba(245, 158, 11, 0.10);
   --color-warning-border: rgba(245, 158, 11, 0.25);
 
-  --color-danger: #EF4444;
+  --color-danger: #ef4444;
   --color-danger-bg: rgba(239, 68, 68, 0.10);
   --color-danger-border: rgba(239, 68, 68, 0.25);
 
-  --color-info: #38BDF8;
+  --color-info: #38bdf8;
   --color-info-bg: rgba(56, 189, 248, 0.10);
   --color-info-border: rgba(56, 189, 248, 0.25);
 
   /* =====================================================
      TYPOGRAPHY
      ===================================================== */
-  --font-sans: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", "Plus Jakarta Sans",
+    Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular,
     "Cascadia Code", "Fira Code", Menlo, Monaco, Consolas, monospace;
 
@@ -87,38 +89,39 @@
      CORNER RADII
      ===================================================== */
   --radius-xs: 4px;
-  --radius-sm: 7px;
-  --radius-btn: 8px;
-  --radius-input: 10px;
-  --radius-md: 10px;
-  --radius-popover: 10px;
-  --radius-lg: 14px;
-  --radius-composer: 16px;
+  --radius-sm: 8px;
+  --radius-btn: 9px;
+  --radius-input: 11px;
+  --radius-md: 12px;
+  --radius-popover: 12px;
+  --radius-lg: 16px;
+  --radius-composer: 18px;
 
   /* =====================================================
-     SHADOWS
+     SHADOWS — Deep cinematic ambient shadows + rim lights
      ===================================================== */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.35), 0 0 1px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 14px -2px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
-  --shadow-composer: 0 2px 20px -2px rgba(0, 0, 0, 0.5);
-  --shadow-popover: 0 10px 30px -4px rgba(0, 0, 0, 0.65), 0 4px 10px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-modal: 0 24px 56px -8px rgba(0, 0, 0, 0.85), 0 8px 20px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-md: 0 8px 24px -4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --shadow-composer: 0 16px 40px -8px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-popover: 0 16px 40px -4px rgba(0, 0, 0, 0.75), 0 4px 12px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-modal: 0 24px 64px -8px rgba(0, 0, 0, 0.85), 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 
   /* =====================================================
-     TRANSITIONS
+     TRANSITIONS — "Makhan" Spring Physics
      ===================================================== */
-  --transition-fast: 120ms cubic-bezier(0.16, 1, 0.3, 1);
-  --transition-normal: 180ms cubic-bezier(0.16, 1, 0.3, 1);
-  --transition-slow: 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-normal: 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 300ms cubic-bezier(0.16, 1, 0.3, 1);
 
   /* =====================================================
      LAYOUT DIMENSIONS
      ===================================================== */
-  --sidebar-width: 248px;
+  --sidebar-width: 252px;
   --header-height: 54px;
-  --content-max-width: 800px;
-  --composer-max-width: 768px;
+  --content-max-width: 820px;
+  --composer-max-width: 760px;
 }
 
 /* ==========================================================
@@ -141,10 +144,12 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.006em;
+  word-spacing: 0.035em;
+  text-rendering: optimizeLegibility;
 }
 
 #root {
