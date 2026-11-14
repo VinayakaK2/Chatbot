@@ -23,7 +23,6 @@ import {
   IconPlus,
   IconRefresh,
   IconSidebar,
-  IconSplit,
   IconTerminal,
   IconX,
 } from '../common/Icons'
@@ -384,7 +383,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           </div>
         </div>
 
-        {/* Top Right Panel Controls (Fullscreen and Toggle Sidebar) */}
+        {/* Top Right Panel Controls (Fullscreen) */}
         <div className="file-viewer-top-actions">
           <button
             type="button"
@@ -394,16 +393,6 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             aria-label="Toggle Fullscreen"
           >
             <IconMaximize size={14} />
-          </button>
-
-          <button
-            type="button"
-            className="panel-tool-btn panel-tool-toggle-btn"
-            onClick={onClose}
-            title="Toggle Side Panel (Close)"
-            aria-label="Toggle Side Panel"
-          >
-            <IconSidebar size={16} />
           </button>
         </div>
       </div>
@@ -528,15 +517,15 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             <IconRefresh size={13} />
           </button>
 
-          {/* Split button */}
+          {/* Breadcrumb toggle sidebar button */}
           <button
             type="button"
-            className="breadcrumb-icon-btn"
-            onClick={() => setIsFullscreen((prev) => !prev)}
-            title="Toggle Split Layout"
-            aria-label="Toggle Split Layout"
+            className="breadcrumb-icon-btn is-active"
+            onClick={onClose}
+            title="Toggle Side Panel (Close)"
+            aria-label="Toggle Side Panel"
           >
-            <IconSplit size={13} />
+            <IconSidebar size={14} />
           </button>
         </div>
       </div>

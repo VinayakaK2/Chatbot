@@ -25,10 +25,21 @@
 .workspace-main {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   min-width: 0;
   background-color: var(--bg-workspace);
+  position: relative;
+  overflow: hidden;
+}
+
+.workspace-center-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
   position: relative;
 }
 
@@ -3697,6 +3708,11 @@
 .breadcrumb-icon-btn:hover {
   background-color: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.breadcrumb-icon-btn.is-active {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .file-viewer-body {

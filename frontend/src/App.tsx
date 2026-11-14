@@ -640,64 +640,64 @@ export const App: React.FC = () => {
 
       {/* 2. Main Workspace Surface */}
       <main className="workspace-main" role="main">
-        {/* Workspace Top Header */}
-        <header className="workspace-header">
-          <div className="header-left">
-            {isSidebarCollapsed && (
+        {/* Left/Center Workspace Column (Header + Chat/Hero) */}
+        <div className="workspace-center-column">
+          {/* Workspace Top Header */}
+          <header className="workspace-header">
+            <div className="header-left">
+              {isSidebarCollapsed && (
+                <button
+                  type="button"
+                  className="header-btn header-btn-icon"
+                  onClick={() => setIsSidebarCollapsed(false)}
+                  title="Expand sidebar (Ctrl+B)"
+                  aria-label="Expand sidebar"
+                >
+                  <IconSidebar size={16} />
+                </button>
+              )}
+
+              <div className="header-title-box">
+                {!isEmpty && activeConversation?.title && activeConversation.title !== 'New Conversation' && (
+                  <span className="header-title">
+                    {currentProject ? `${currentProject.name} / ${activeConversation.title}` : activeConversation.title}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="header-right">
+              {/* Accessible command palette button for test & shortcut compatibility */}
               <button
                 type="button"
-                className="header-btn header-btn-icon"
-                onClick={() => setIsSidebarCollapsed(false)}
-                title="Expand sidebar (Ctrl+B)"
-                aria-label="Expand sidebar"
+                className="sr-only"
+                onClick={() => setIsCommandPaletteOpen(true)}
+                aria-label="Command Palette"
               >
-                <IconSidebar size={16} />
+                Command Palette
               </button>
-            )}
 
-            <div className="header-title-box">
-              {!isEmpty && activeConversation?.title && activeConversation.title !== 'New Conversation' && (
-                <span className="header-title">
-                  {currentProject ? `${currentProject.name} / ${activeConversation.title}` : activeConversation.title}
-                </span>
+              {/* Toggle Side Panel Button — only visible when panel is closed */}
+              {!isPreviewOpen && (
+                <button
+                  type="button"
+                  className="header-toggle-sidebar-btn"
+                  onClick={() => {
+                    setPreviewDiff(null)
+                    setPreviewArtifact(null)
+                    setIsPreviewOpen(true)
+                  }}
+                  title="Open Side Panel (Files & Terminal)"
+                  aria-label="Toggle Side Panel"
+                >
+                  <IconSidebar size={18} />
+                </button>
               )}
             </div>
-          </div>
+          </header>
 
-          <div className="header-right">
-            {/* Accessible command palette button for test & shortcut compatibility */}
-            <button
-              type="button"
-              className="sr-only"
-              onClick={() => setIsCommandPaletteOpen(true)}
-              aria-label="Command Palette"
-            >
-              Command Palette
-            </button>
-
-            {/* Toggle Side Panel Button */}
-            <button
-              type="button"
-              className={`header-toggle-sidebar-btn ${isPreviewOpen ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isPreviewOpen) {
-                  setPreviewDiff(null)
-                  setPreviewArtifact(null)
-                  setIsPreviewOpen(true)
-                } else {
-                  setIsPreviewOpen(false)
-                }
-              }}
-              title="Toggle Side Panel (Files & Terminal)"
-              aria-label="Toggle Side Panel"
-            >
-              <IconSidebar size={18} />
-            </button>
-          </div>
-        </header>
-
-        {/* Workspace Body: Empty State Hero OR Active Conversation */}
-        <div className="workspace-body">
+          {/* Workspace Body: Empty State Hero OR Active Conversation */}
+          <div className="workspace-body">
           {isEmpty ? (
             /* Intentionally Designed Centered Hero Empty State */
             <div className="workspace-empty-view">
@@ -833,17 +833,19 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* 3. Optional Right Preview / Inspection Drawer */}
-          <PreviewPanel
-            isOpen={isPreviewOpen}
-            onClose={() => setIsPreviewOpen(false)}
-            artifact={previewArtifact}
-            diff={previewDiff}
-            verification={previewVerification}
-            terminalOutput={previewTerminal}
-            onOpenDiff={handleOpenDiffReview}
-          />
+          </div>
         </div>
+
+        {/* 3. Right Preview / Inspection Drawer (Starts at top: 0, full height) */}
+        <PreviewPanel
+          isOpen={isPreviewOpen}
+          onClose={() => setIsPreviewOpen(false)}
+          artifact={previewArtifact}
+          diff={previewDiff}
+          verification={previewVerification}
+          terminalOutput={previewTerminal}
+          onOpenDiff={handleOpenDiffReview}
+        />
       </main>
 
       {/* 4. Overlays & Modals */}
