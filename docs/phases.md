@@ -765,8 +765,9 @@ Longer sessions can continue with bounded context and traceable source history.
 
 # Phase 7 — Persistent state and session recovery
 
-**Status:** IMPLEMENTED · VERIFIED · READY FOR OPERATOR FREEZE  
-**Implementation Date:** 2026-11-15  
+**Status:** FROZEN · PERMANENTLY LOCKED  
+**Formal Freeze Decision:** APPROVED by Operator on 2026-11-15  
+**HEAD Commit at Freeze:** `3a9a378`  
 **Authoritative Evidence Artifacts:**
 - Design Specification: [`docs/reports/phase-7/phase-7-design.md`](reports/phase-7/phase-7-design.md)
 - Implementation Report: [`docs/reports/phase-7/phase-7-implementation-report.md`](reports/phase-7/phase-7-implementation-report.md)
@@ -794,10 +795,11 @@ Persist authoritative task/session state and enough execution records to inspect
 ## Candidate files
 
 - `storage/database.py`
-- `storage/migrations/`
+- `storage/migrations.py`
+- `storage/models.py`
 - `storage/repositories.py`
 - `core/session_manager.py`
-- `core/state_manager.py`
+- `core/recovery.py`
 - `tests/test_persistence.py`
 - `tests/test_session_recovery.py`
 
@@ -814,6 +816,36 @@ Persist authoritative task/session state and enough execution records to inspect
 ## Exit gate
 
 A task can be inspected after restart and resumed only where the runtime can justify that resumption is safe.
+
+- **Gate Evaluation:** PASSED.
+- **Formal Freeze Decision:** APPROVED by Operator on 2026-11-15.
+- **Status:** FROZEN.
+- **Core Verification Summary:**
+  - `storage/database.py`: Thread-safe SQLite connection management with `PRAGMA foreign_keys = ON`, `PRAGMA busy_timeout = 5000`, WAL journal mode, and atomic context-managed transactions with commit and rollback.
+  - `storage/migrations.py`: Versioned migration engine with automated tracking in `schema_migrations`.
+    - Migration 001 (`001_initial_schema`): Created 7 relational tables (`sessions`, `tasks`, `state_transitions`, `transcript_messages`, `tool_executions`, `model_calls`, `approvals`) with indexed lookups and referential integrity.
+    - Migration 002 (`002_immutability_triggers_and_continuations`): Safe backward-compatible column inspection (`PRAGMA table_info`), non-destructive continuation deduplication re-parenting historical duplicate continuations chronologically without deleting any records, partial unique index `uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;`, and SQLite engine triggers (`trg_prevent_terminal_task_update`, `trg_prevent_illegal_pending_transition`, `trg_prevent_illegal_executing_transition`).
+  - `storage/repositories.py`: Strongly typed CRUD repositories (`SessionRepository`, `TaskRepository`, `TranscriptRepository`, `ToolExecutionRepository`, `ModelCallRepository`, `ApprovalRepository`) enforcing optimistic locking via version counters, linearizable state transitions, and secret sanitization on all write paths.
+  - `core/recovery.py` (`StartupRecoveryEngine`): Deterministic crash-boundary reconciliation inspecting uncompleted tasks at startup.
+    - Interrupted tasks with unverified, unknown, or mutating tool calls classified as `NEEDS_REVIEW` (status `FAILED`, `recovery_status = 'needs_review'`) with zero blind replay.
+    - Interrupted tasks with only verified `READ_ONLY` tools or zero tools classified as `SAFE_TO_RESUME` (original task preserved in terminal `FAILED` with `recovery_status = 'interrupted_safe'`).
+    - Safe resumption spawns a new linked continuation task (`parent_task_id = original.id`, status `PENDING`, `recovery_status = 'repaired'`).
+    - Concurrency races on continuation creation are resolved atomically via SQLite partial unique index: winning transaction commits; competing transaction rolls back without orphan records and fetches the winning continuation via a clean read.
+    - Non-uniqueness integrity errors (FK, CHECK, NOT NULL) fail closed and re-raise. Database busy/locked errors (`sqlite3.OperationalError`) are distinguished from uniqueness conflicts and re-raised cleanly.
+    - Ephemeral security boundary: all volatile authorizations in `status IN ('pending', 'approved')` are expired across restart boundaries; all 6 approval lifecycle states (`pending`, `approved`, `consumed`, `denied`, `expired`, `cancelled`) verified.
+  - `core/session_manager.py`: Session context reconstruction from persistent SQLite storage with ordering preservation across tasks, turns, and metadata.
+- **Verification Evidence:**
+  - 522/523 backend pytest tests passing (522 passed, 1 skipped live GPU endpoint test, 1 warning in 37.96s).
+  - 55/55 frontend vitest tests passing across 10 test files.
+  - Frontend production build (`tsc -b && vite build`) passing cleanly with 0 errors in 581ms.
+  - 41 direct Phase 7 tests (18 in `tests/test_persistence.py`, 17 in `tests/test_session_recovery.py`, 6 in `tests/test_api_sessions.py`).
+  - Zero regressions across 475 pre-existing Phase 0–6 tests.
+  - 10/10 forensic audit findings (F7-01 to F7-06, Issues 1–5, and Reviews A–D) verified and closed.
+- **Deliberate Accepted Limitations & Qualifications:**
+  - *Full-Row Update Immutability vs Deletion (Review A):* The invariant is that terminal task records cannot be updated (full-row update immutability). Deletion is intentionally restricted to low-level administrative repository methods (`TaskRepository.delete()`), never exposed on public REST APIs; child rows cascade via FKs, while `state_transitions` audit history has no foreign key cascade and remains permanently recorded.
+  - *Secret Sanitization Characterization (F7-03, Issue 4):* Sanitization (`redact_secrets`) is documented as defense-in-depth sanitization against tested credential patterns on recorded write paths rather than a mathematical guarantee of universal confidentiality.
+  - *Hermes Architectural Reference Qualification (Issue 5):* Section 10.2 of `2604.14228v3.pdf` is cited as an architectural pattern observed in Hermes Agent rather than a universal requirement.
+- **Integrity Boundary:** Phase 7 implementation is FROZEN. Zero regressions or modifications permitted in Phase 7 files (`storage/`, `core/recovery.py`, `core/session_manager.py`). Phase 8 implementation has not been started and requires separate operator authorization.
 
 ---
 
