@@ -260,19 +260,59 @@ def get_git_diff() -> GitDiffResponse:
     status_code=status.HTTP_200_OK,
     summary="List available reports and key documents for quick opening",
 )
-def list_available_documents() -> List[WorkspaceFileItem]:
-    """List accessible reports from docs/reports and project root documents."""
+def list_available_documents(
+    all_files: bool = Query(False, description="Scan entire workspace"),
+    search: Optional[str] = Query(None, description="Filter files by name or relative path"),
+    limit: int = Query(200, ge=1, le=1000, description="Max files to return"),
+) -> List[WorkspaceFileItem]:
+    """List accessible files from project workspace for file picker and inspection."""
     workspace = _get_workspace()
     items: List[WorkspaceFileItem] = []
+    seen_paths = set()
+    ignored = {".git", "node_modules", "__pycache__", ".venv", ".pytest_cache", "dist", "build"}
 
-    # Priority directories to scan for reports and documentation
+    # If all_files requested or searching, scan full workspace bounded by limit
+    if all_files or search:
+        search_lower = search.lower().strip() if search else None
+        try:
+            for dirpath, dirnames, filenames in os.walk(str(workspace.root_path)):
+                dirnames[:] = [d for d in dirnames if d not in ignored and not d.startswith(".")]
+                for fname in filenames:
+                    if fname.startswith("."):
+                        continue
+                    full_p = Path(dirpath) / fname
+                    try:
+                        rel = workspace.get_relative_path(full_p)
+                    except Exception:
+                        continue
+                    if search_lower and search_lower not in rel.lower() and search_lower not in fname.lower():
+                        continue
+                    if rel not in seen_paths:
+                        seen_paths.add(rel)
+                        items.append(
+                            WorkspaceFileItem(
+                                path=rel,
+                                name=fname,
+                                is_dir=False,
+                                is_markdown=full_p.suffix.lower() in {".md", ".markdown"},
+                                size_bytes=full_p.stat().st_size if full_p.exists() else 0,
+                            )
+                        )
+                        if len(items) >= limit:
+                            break
+                if len(items) >= limit:
+                    break
+        except Exception as exc:
+            logger.warning("Error scanning workspace files: %s", str(exc))
+        return items
+
+    # Default: scan priority directories for reports and documentation
     target_dirs = [
         workspace.root_path / "docs" / "reports",
         workspace.root_path / "docs",
         workspace.root_path,
     ]
 
-    seen_paths = set()
     for directory in target_dirs:
         if not directory.exists() or not directory.is_dir():
             continue

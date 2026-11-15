@@ -1,15 +1,16 @@
 /**
  * Antigravity-Style File & Diff Viewer Split Panel.
  * Supports multi-tab browsing, Markdown live rendering (Preview / Raw),
- * Git diff inspection, and workspace file exploration.
+ * Git diff inspection, workspace file exploration, and interactive PowerShell terminal.
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react'
-import type { FileDiff, VerificationRecord } from '../../types/api'
+import type { FileDiff, VerificationRecord, WorkspaceFileItem } from '../../types/api'
 import { CodeBlock } from '../chat/CodeBlock'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { FileDiffViewer } from '../activity/FileDiffViewer'
 import { VerificationBadge } from '../activity/VerificationBadge'
+import { TerminalView } from './TerminalView'
 import { apiClient } from '../../services/api-client'
 import {
   IconCheck,
@@ -22,6 +23,7 @@ import {
   IconMoreVertical,
   IconPlus,
   IconRefresh,
+  IconSearch,
   IconSidebar,
   IconTerminal,
   IconX,
@@ -45,6 +47,8 @@ export interface FileViewerPanelProps {
   activeTabId?: string
   initialTabs?: FileViewerTab[]
   onOpenDiff?: () => void
+  workspaceName?: string
+  workspaceRoot?: string
 }
 
 export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
@@ -53,27 +57,19 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   activeTabId: externalActiveTabId,
   initialTabs,
   onOpenDiff,
+  workspaceName = 'workspace',
+  workspaceRoot = 'h:\\chatbot',
 }) => {
   const [tabs, setTabs] = useState<FileViewerTab[]>(() => {
     if (initialTabs && initialTabs.length > 0) return initialTabs
-    // Default initial tabs matching Image 2
     return [
-      {
-        id: 'agent_loop.py',
-        title: 'agent_loop.py',
-        path: 'core/agent_loop.py',
-        type: 'code',
-        language: 'python',
-        content: '# Loading core/agent_loop.py...',
-      },
       {
         id: 'powershell.exe',
         title: 'powershell.exe',
         path: 'powershell.exe',
         type: 'terminal',
         language: 'shell',
-        content:
-          'PS H:\\chatbot> pytest tests/\n============================= test session starts =============================\nplatform win32 -- Python 3.14.6, pytest-8.3.5\ncollected 325 items\n\ntests/test_task_concurrency.py ......................................   [ 11%]\ntests/test_agent_loop.py .................                              [ 16%]\ntests/test_tool_dispatcher.py ..............                             [ 20%]\ntests/test_workspace_security.py ..................                     [ 26%]\ntests/test_filesystem.py ..............                                 [ 30%]\ntests/test_filesystem_integration.py ...........                       [ 33%]\n\n============================= 325 passed in 4.91s =============================',
+        content: '',
       },
     ]
   })
@@ -84,8 +80,13 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [copied, setCopied] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false)
+  const [isFilePickerOpen, setIsFilePickerOpen] = useState(false)
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false)
+  const [fileSearchQuery, setFileSearchQuery] = useState('')
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileItem[]>([])
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false)
+  const [isLoadingFile, setIsLoadingFile] = useState(false)
   const [isFitToScreen, setIsFitToScreen] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('chatbot_file_viewer_fit_to_screen')
@@ -93,11 +94,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     } catch {
       // Ignore localStorage access failures
     }
-    return true // Default true so code lines wrap and fit to screen without horizontal overflow
+    return true
   })
-  const [availableDocs, setAvailableDocs] = useState<{ path: string; name: string }[]>([])
-  const [isLoadingFile, setIsLoadingFile] = useState(false)
-  const pickerRef = useRef<HTMLDivElement>(null)
+
+  const plusMenuRef = useRef<HTMLDivElement>(null)
+  const filePickerRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
 
   const handleToggleFitToScreen = () => {
@@ -112,7 +113,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     })
   }
 
-  // Draggable width state (Antigravity-style split pane)
+  // Draggable width state
   const MIN_PANEL_WIDTH = 360
   const getInitialWidth = () => {
     if (typeof window === 'undefined') return 560
@@ -135,7 +136,6 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
 
-  // Double-click resets to default width
   const handleResetWidth = useCallback(() => {
     const defaultW = Math.min(Math.max(Math.round(window.innerWidth * 0.48), 480), 820)
     setPanelWidth(defaultW)
@@ -144,7 +144,6 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     } catch {}
   }, [])
 
-  // Start drag on mouse down
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -153,13 +152,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     document.body.style.userSelect = 'none'
   }, [])
 
-  // Start drag on touch start
   const handleTouchStart = useCallback(() => {
     setIsDragging(true)
     isDraggingRef.current = true
   }, [])
 
-  // Keyboard accessibility for resizing divider
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowLeft') {
       e.preventDefault()
@@ -247,7 +244,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     }
   }, [externalActiveTabId])
 
-  // If initialTabs changes from parent (e.g. artifact/diff passed in)
+  // If initialTabs changes from parent (e.g. artifact/diff/file passed in)
   useEffect(() => {
     if (initialTabs && initialTabs.length > 0) {
       setTabs((prev) => {
@@ -296,13 +293,12 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           )
         })
         .catch(() => {
-          // Fallback to sample evidence content if backend file is unreachable
           setTabs((prev) =>
             prev.map((t) =>
               t.id === activeTab.id
                 ? {
                     ...t,
-                    content: `# Phase 4 Forensic Test Evidence & Reproducibility Matrix\n\n**Audit Target:** Phase 4 — Workspace and Filesystem Tools  \n**Execution Environment:** Windows 11 (AMD64), Python 3.14.6 in \`.venv\`, Node.js v20+, Vite 8.3.5  \n**Date:** ${new Date().toISOString().slice(0, 10)}\n\n---\n\n### 1. Test Execution Summary\n\n| Test Category | Exact Command | Total | Passed | Failed |\n|:---|:---|:---:|:---:|:---:|\n| **Workspace Security** | \`pytest tests/test_workspace_security.py\` | 18 | 18 | 0 |\n| **Filesystem Unit** | \`pytest tests/test_filesystem.py\` | 14 | 14 | 0 |\n| **Filesystem Integration** | \`pytest tests/test_filesystem_integration.py\` | 11 | 11 | 0 |\n| **Full Backend Regression** | \`pytest tests/\` | 325 | 325 | 0 |\n| **Frontend Vitest** | \`npm test\` | 39 | 39 | 0 |\n\n---\n\n### 2. Forensic Verdict\n**Verdict:** \`VERIFIED_AND_STABLE\`  \nAll canonical path boundaries, containment checks, and concurrent task execution rules verified.`,
+                    content: `// Error: Unable to load ${activeTab.path}\n// File not found in workspace: ${workspaceRoot}`,
                   }
                 : t
             )
@@ -310,7 +306,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
         })
         .finally(() => setIsLoadingFile(false))
     }
-  }, [activeTabId, tabs])
+  }, [activeTabId, tabs, workspaceRoot])
 
   const handleReloadActiveFile = () => {
     const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -337,21 +333,102 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
       .finally(() => setIsLoadingFile(false))
   }
 
-  // Close picker and more menu on click outside
+  // Fetch workspace files when opening file picker
+  const handleOpenWorkspaceFilePicker = async () => {
+    setIsPlusMenuOpen(false)
+    setIsFilePickerOpen(true)
+    setIsLoadingFiles(true)
+    try {
+      const files = await apiClient.getAvailableDocuments(true)
+      setWorkspaceFiles(files)
+    } catch {
+      setWorkspaceFiles([])
+    } finally {
+      setIsLoadingFiles(false)
+    }
+  }
+
+  // Handle selecting a file from workspace file picker
+  const handleSelectWorkspaceFile = (file: WorkspaceFileItem) => {
+    setIsFilePickerOpen(false)
+    setFileSearchQuery('')
+    const existing = tabs.find((t) => t.path === file.path)
+    if (existing) {
+      setActiveTabId(existing.id)
+      return
+    }
+
+    const newTabId = `file-${file.path}`
+    const isMd = file.is_markdown || file.name.endsWith('.md')
+    const lang = file.name.endsWith('.py')
+      ? 'python'
+      : file.name.endsWith('.ts') || file.name.endsWith('.tsx')
+      ? 'typescript'
+      : file.name.endsWith('.js')
+      ? 'javascript'
+      : file.name.endsWith('.json')
+      ? 'json'
+      : isMd
+      ? 'markdown'
+      : 'text'
+
+    const newTab: FileViewerTab = {
+      id: newTabId,
+      title: file.name,
+      path: file.path,
+      type: isMd ? 'markdown' : 'code',
+      language: lang,
+      content: '# Loading file content...',
+    }
+
+    setTabs((prev) => [...prev, newTab])
+    setActiveTabId(newTabId)
+  }
+
+  // Handle creating a new terminal tab
+  const handleOpenNewTerminal = () => {
+    setIsPlusMenuOpen(false)
+    const termCount = tabs.filter((t) => t.type === 'terminal').length
+    const termId = termCount === 0 ? 'powershell.exe' : `powershell-${termCount + 1}.exe`
+    const termTitle = termCount === 0 ? 'powershell.exe' : `powershell (${termCount + 1}).exe`
+
+    const existing = tabs.find((t) => t.id === termId)
+    if (existing) {
+      setActiveTabId(existing.id)
+      return
+    }
+
+    const newTermTab: FileViewerTab = {
+      id: termId,
+      title: termTitle,
+      path: 'powershell.exe',
+      type: 'terminal',
+      language: 'shell',
+      content: '',
+    }
+
+    setTabs((prev) => [...prev, newTermTab])
+    setActiveTabId(termId)
+  }
+
+  // Close menus on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setIsPickerOpen(false)
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setIsPlusMenuOpen(false)
+      }
+      if (filePickerRef.current && !filePickerRef.current.contains(e.target as Node)) {
+        setIsFilePickerOpen(false)
       }
       if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
         setIsMoreMenuOpen(false)
       }
     }
-    if (isPickerOpen || isMoreMenuOpen) {
+    if (isPlusMenuOpen || isFilePickerOpen || isMoreMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside)
     }
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isPickerOpen, isMoreMenuOpen])
+  }, [isPlusMenuOpen, isFilePickerOpen, isMoreMenuOpen])
 
   if (!isOpen) return null
 
@@ -385,49 +462,12 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
     }
   }
 
-  const handleOpenPicker = async () => {
-    setIsPickerOpen((prev) => !prev)
-    if (!isPickerOpen) {
-      try {
-        const docs = typeof apiClient?.getAvailableDocuments === 'function'
-          ? await apiClient.getAvailableDocuments()
-          : []
-        setAvailableDocs(docs)
-      } catch {
-        setAvailableDocs([
-          { path: 'docs/reports/phase-4-test-evidence.md', name: 'phase-4-test-evidence.md' },
-          { path: 'docs/reports/phase-4-implementation-report.md', name: 'phase-4-implementation-report.md' },
-          { path: 'docs/reports/phase-3-final-acceptance-audit.md', name: 'phase-3-final-acceptance-audit.md' },
-          { path: 'README.md', name: 'README.md' },
-          { path: 'package.json', name: 'package.json' },
-        ])
-      }
-    }
-  }
-
-  const handleSelectDoc = async (doc: { path: string; name: string }) => {
-    setIsPickerOpen(false)
-    const existing = tabs.find((t) => t.path === doc.path)
-    if (existing) {
-      setActiveTabId(existing.id)
-      return
-    }
-
-    const newTabId = `tab-${Date.now()}`
-    const isMd = doc.name.endsWith('.md') || doc.name.endsWith('.markdown')
-
-    const newTab: FileViewerTab = {
-      id: newTabId,
-      title: doc.name,
-      path: doc.path,
-      type: isMd ? 'markdown' : 'code',
-      language: isMd ? 'markdown' : 'text',
-      content: '# Loading file content...',
-    }
-
-    setTabs((prev) => [...prev, newTab])
-    setActiveTabId(newTabId)
-  }
+  // Filtered files for search
+  const filteredFiles = workspaceFiles.filter((f) => {
+    if (!fileSearchQuery) return true
+    const q = fileSearchQuery.toLowerCase()
+    return f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q)
+  })
 
   // Generate breadcrumb items
   const breadcrumbParts = activeTab
@@ -446,7 +486,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
       role="complementary"
       aria-label="Files and Git Diff Viewer Panel"
     >
-      {/* Draggable Divider Handle (Antigravity-style) */}
+      {/* Draggable Divider Handle */}
       {!isFullscreen && (
         <div
           className={`panel-resize-handle ${isDragging ? 'is-dragging' : ''}`}
@@ -464,7 +504,8 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
           title="Drag to resize panel (Double-click to reset, Left/Right arrow keys)"
         />
       )}
-      {/* 1. Antigravity-Style Tabs Bar */}
+
+      {/* 1. Tabs Bar */}
       <div className="file-viewer-tabs-bar">
         <div className="file-viewer-tabs-scroll">
           {tabs.map((tab) => {
@@ -516,44 +557,45 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             )
           })}
 
-          {/* Plus Add Tab Button */}
-          <div className="file-tab-add-container" ref={pickerRef}>
+          {/* Plus (+) Add Tab Button with Dropdown Menu */}
+          <div className="file-tab-add-container" ref={plusMenuRef}>
             <button
               type="button"
               className="file-tab-add-btn"
-              onClick={handleOpenPicker}
-              title="Open File or Document (+)"
-              aria-label="Open File"
+              onClick={() => setIsPlusMenuOpen((prev) => !prev)}
+              title="Open File or New Terminal (+)"
+              aria-label="Add Tab Options"
             >
               <IconPlus size={14} />
             </button>
 
-            {/* Quick Document Picker Popover */}
-            {isPickerOpen && (
-              <div className="file-picker-dropdown">
-                <div className="file-picker-header">Open Workspace Document</div>
-                <div className="file-picker-list">
-                  {availableDocs.map((doc) => (
-                    <button
-                      key={doc.path}
-                      type="button"
-                      className="file-picker-item"
-                      onClick={() => handleSelectDoc(doc)}
-                    >
-                      <IconFile size={13} color="var(--text-secondary)" />
-                      <div className="file-picker-item-details">
-                        <span className="file-picker-item-name">{doc.name}</span>
-                        <span className="file-picker-item-path">{doc.path}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+            {/* Dropdown: Open File... / New Terminal */}
+            {isPlusMenuOpen && (
+              <div className="file-plus-menu-dropdown" role="menu">
+                <button
+                  type="button"
+                  className="file-plus-menu-item"
+                  onClick={handleOpenWorkspaceFilePicker}
+                  role="menuitem"
+                >
+                  <IconFileCode size={13} />
+                  <span>Open File...</span>
+                </button>
+                <button
+                  type="button"
+                  className="file-plus-menu-item"
+                  onClick={handleOpenNewTerminal}
+                  role="menuitem"
+                >
+                  <IconTerminal size={13} />
+                  <span>New Terminal</span>
+                </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* Top Right Panel Controls (Fullscreen & Toggle Sidebar) */}
+        {/* Top Right Panel Controls */}
         <div className="file-viewer-top-actions">
           <button
             type="button"
@@ -577,11 +619,70 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
         </div>
       </div>
 
+      {/* Quick Workspace File Picker Overlay */}
+      {isFilePickerOpen && (
+        <div className="workspace-file-picker-overlay" ref={filePickerRef} role="dialog" aria-label="Select file to open">
+          <div className="workspace-file-picker-header">
+            <span>Open File in {workspaceName}</span>
+            <button
+              type="button"
+              className="breadcrumb-icon-btn"
+              onClick={() => setIsFilePickerOpen(false)}
+              aria-label="Close file picker"
+            >
+              <IconX size={13} />
+            </button>
+          </div>
+          <div className="workspace-file-picker-search-bar">
+            <IconSearch size={14} color="var(--text-muted)" />
+            <input
+              type="text"
+              className="workspace-file-picker-input"
+              value={fileSearchQuery}
+              onChange={(e) => setFileSearchQuery(e.target.value)}
+              placeholder="Search files by name (e.g. tests, app.tsx)..."
+              autoFocus
+            />
+          </div>
+          <div className="workspace-file-picker-list">
+            {isLoadingFiles ? (
+              <div className="file-viewer-loading">
+                <span className="inline-loader-spinner" />
+                <span>Loading workspace files...</span>
+              </div>
+            ) : filteredFiles.length === 0 ? (
+              <div className="workspace-file-picker-empty">
+                No matching files found in {workspaceName}
+              </div>
+            ) : (
+              filteredFiles.map((file) => (
+                <button
+                  key={file.path}
+                  type="button"
+                  className="workspace-file-picker-item"
+                  onClick={() => handleSelectWorkspaceFile(file)}
+                >
+                  {file.name.endsWith('.py') ? (
+                    <span className="badge-python-glyph" style={{ fontSize: 13 }}>🐍</span>
+                  ) : file.is_markdown ? (
+                    <span className="badge-md-glyph" style={{ fontSize: 10 }}>M↓</span>
+                  ) : (
+                    <IconFile size={13} color="var(--text-secondary)" />
+                  )}
+                  <span className="workspace-file-picker-item-name">{file.name}</span>
+                  <span className="workspace-file-picker-item-path">{file.path}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 2. Breadcrumb & Action Toolbar */}
       <div className="file-viewer-breadcrumb-bar">
-        {/* Left: Breadcrumbs */}
+        {/* Left: Dynamic Breadcrumbs rooted in active workspace folder */}
         <div className="file-breadcrumb-trail">
-          <span className="breadcrumb-root">chatbot</span>
+          <span className="breadcrumb-root">{workspaceName}</span>
           {breadcrumbParts.map((part, idx) => (
             <React.Fragment key={`${part}-${idx}`}>
               <span className="breadcrumb-separator">&rsaquo;</span>
@@ -623,7 +724,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             </div>
           )}
 
-          {/* Three Dots More Menu (contains Copy File Content) */}
+          {/* Three Dots More Menu */}
           <div className="file-more-menu-container" ref={moreMenuRef}>
             <button
               type="button"
@@ -715,13 +816,19 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
         </div>
       </div>
 
-      {/* 3. Panel Body: Markdown Renderer OR CodeBlock OR DiffViewer */}
+      {/* 3. Panel Body: TerminalView OR Markdown Renderer OR CodeBlock OR DiffViewer */}
       <div className={`file-viewer-body ${isFitToScreen ? 'is-fit-to-screen' : ''}`}>
         {isLoadingFile ? (
           <div className="file-viewer-loading">
             <span className="inline-loader-spinner" />
             <span>Loading document...</span>
           </div>
+        ) : activeTab?.type === 'terminal' ? (
+          <TerminalView
+            workingDir={workspaceRoot}
+            initialCommand={activeTab.terminalOutput?.command}
+            initialOutput={activeTab.terminalOutput?.output || activeTab.content}
+          />
         ) : activeTab?.type === 'diff' ? (
           <div className="file-viewer-diff-wrap">
             {activeTab.diff ? (

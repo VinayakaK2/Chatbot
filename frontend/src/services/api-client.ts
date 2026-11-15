@@ -15,6 +15,7 @@ import type {
   WorkspaceFileItem,
   WorkspaceInfo,
   BrowseDirectoryResponse,
+  WorkspaceCommandResponse,
 } from '../types/api'
 
 // Base URL defaults to relative path in dev (handled by Vite reverse proxy) or env override
@@ -336,9 +337,13 @@ export const apiClient = {
   /**
    * List available markdown reports and workspace documents for quick tab opening.
    */
-  async getAvailableDocuments(): Promise<WorkspaceFileItem[]> {
+  async getAvailableDocuments(allFiles = false, search?: string): Promise<WorkspaceFileItem[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/files/list`, {
+      const queryParams = new URLSearchParams()
+      if (allFiles) queryParams.set('all_files', 'true')
+      if (search) queryParams.set('search', search)
+      const queryString = queryParams.toString() ? `?${queryParams.toString()}` : ''
+      const res = await fetch(`${API_BASE_URL}/api/files/list${queryString}`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
       })
@@ -352,6 +357,40 @@ export const apiClient = {
         throw err
       }
       return []
+    }
+  },
+
+  /**
+   * Execute an interactive local PowerShell terminal command in the workspace.
+   */
+  async executeCommand(
+    command: string,
+    workingDir?: string,
+    timeoutSeconds?: number
+  ): Promise<WorkspaceCommandResponse> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/workspace/execute-command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          command,
+          working_dir: workingDir,
+          timeout_seconds: timeoutSeconds,
+        }),
+      })
+      const body = await parseResponseBody(res)
+      if (!res.ok) {
+        throw new Error(extractErrorMessage(res.status, body))
+      }
+      return body as WorkspaceCommandResponse
+    } catch (err) {
+      if (err instanceof Error) {
+        throw err
+      }
+      throw new Error(`Failed to execute command: ${command}`)
     }
   },
 

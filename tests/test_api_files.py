@@ -69,3 +69,14 @@ def test_list_available_documents(client: TestClient) -> None:
     assert "path" in first
     assert "name" in first
     assert "is_markdown" in first
+
+
+def test_list_workspace_files_with_search(client: TestClient) -> None:
+    """Listing files with all_files and search returns matching files from workspace."""
+    response = client.get("/api/files/list?all_files=true&search=README")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    names = [f["name"] for f in data]
+    assert any("README" in n for n in names)
+

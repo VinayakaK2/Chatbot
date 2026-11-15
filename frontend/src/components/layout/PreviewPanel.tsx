@@ -15,6 +15,8 @@ export interface PreviewPanelProps {
   verification?: VerificationRecord | null
   terminalOutput?: { command: string; output: string } | null
   onOpenDiff?: () => void
+  workspaceName?: string
+  workspaceRoot?: string
 }
 
 export const PreviewPanel: React.FC<PreviewPanelProps> = ({
@@ -25,31 +27,11 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
   verification,
   terminalOutput,
   onOpenDiff,
+  workspaceName,
+  workspaceRoot,
 }) => {
   const tabs: FileViewerTab[] = []
-
-  // Image 2 default code tab: agent_loop.py
-  const agentLoopTab: FileViewerTab = {
-    id: 'agent_loop.py',
-    title: 'agent_loop.py',
-    path: 'core/agent_loop.py',
-    type: 'code',
-    language: 'python',
-    content: '# Loading core/agent_loop.py...',
-  }
-
-  // Image 2 default terminal tab: powershell.exe
-  const powershellTab: FileViewerTab = {
-    id: 'powershell.exe',
-    title: 'powershell.exe',
-    path: 'powershell.exe',
-    type: 'terminal',
-    language: 'shell',
-    content:
-      'PS H:\\chatbot> pytest tests/\n============================= test session starts =============================\nplatform win32 -- Python 3.14.6, pytest-8.3.5\ncollected 325 items\n\ntests/test_task_concurrency.py ......................................   [ 11%]\ntests/test_agent_loop.py .................                              [ 16%]\ntests/test_tool_dispatcher.py ..............                             [ 20%]\ntests/test_workspace_security.py ..................                     [ 26%]\ntests/test_filesystem.py ..............                                 [ 30%]\ntests/test_filesystem_integration.py ...........                       [ 33%]\n\n============================= 325 passed in 4.91s =============================',
-  }
-
-  let activeId = 'agent_loop.py'
+  let activeId = 'powershell.exe'
 
   if (diff) {
     const diffTab: FileViewerTab = {
@@ -66,11 +48,11 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
 
   if (artifact) {
     const artTab: FileViewerTab = {
-      id: artifact.id || 'artifact-tab',
-      title: artifact.title || 'Document',
+      id: artifact.id || `file-${artifact.file_path || artifact.title || 'doc'}`,
+      title: artifact.title || (artifact.file_path ? artifact.file_path.split('/').pop() || 'File' : 'Document'),
       path: artifact.file_path || artifact.title || 'document.md',
       type: artifact.type === 'code' ? 'code' : 'markdown',
-      language: artifact.language || 'markdown',
+      language: artifact.language || (artifact.type === 'code' ? 'text' : 'markdown'),
       content: artifact.content,
     }
     tabs.push(artTab)
@@ -79,21 +61,28 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
     }
   }
 
-  // Always include agent_loop.py and powershell.exe so panel tabs match Image 2
-  tabs.push(agentLoopTab)
-  tabs.push(powershellTab)
-
   if (terminalOutput) {
     const termTab: FileViewerTab = {
-      id: 'terminal-tab',
-      title: 'Terminal',
-      path: 'terminal.log',
+      id: 'powershell.exe',
+      title: 'powershell.exe',
+      path: 'powershell.exe',
       type: 'terminal',
+      language: 'shell',
       content: terminalOutput.output,
       terminalOutput: terminalOutput,
     }
     tabs.push(termTab)
     activeId = termTab.id
+  } else {
+    // Ensure default terminal tab is present
+    tabs.push({
+      id: 'powershell.exe',
+      title: 'powershell.exe',
+      path: 'powershell.exe',
+      type: 'terminal',
+      language: 'shell',
+      content: '',
+    })
   }
 
   if (verification) {
@@ -116,6 +105,8 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
       initialTabs={tabs}
       activeTabId={activeId}
       onOpenDiff={onOpenDiff}
+      workspaceName={workspaceName}
+      workspaceRoot={workspaceRoot}
     />
   )
 }

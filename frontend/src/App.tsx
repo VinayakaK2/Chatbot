@@ -5,7 +5,7 @@
  * Approval Modal, Settings, and System Status.
  */
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { apiClient } from './services/api-client'
 import { Sidebar } from './components/layout/Sidebar'
 import { ConversationView } from './components/chat/ConversationView'
@@ -89,6 +89,11 @@ export const App: React.FC = () => {
     clearActiveConversation,
     setConversations,
   } = useConversations()
+
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.id === selectedProjectId),
+    [projects, selectedProjectId]
+  )
 
   // Task Execution & Live Event Streaming Hook
   const {
@@ -232,6 +237,21 @@ export const App: React.FC = () => {
   useEffect(() => {
     refreshSystemStatus()
   }, [refreshSystemStatus])
+
+  // Automatically synchronize backend workspace whenever the active project changes
+  useEffect(() => {
+    if (selectedProject?.path && currentWorkspace?.root_path !== selectedProject.path) {
+      apiClient
+        .selectWorkspace(selectedProject.path)
+        .then((ws) => {
+          setCurrentWorkspace(ws)
+          refreshGitDiff()
+        })
+        .catch((err) => {
+          console.warn('Failed to sync backend workspace to active project path:', err)
+        })
+    }
+  }, [selectedProject?.path, currentWorkspace?.root_path, refreshGitDiff])
 
   // Listen for file link clicks dispatched from markdown
   useEffect(() => {
@@ -630,6 +650,59 @@ export const App: React.FC = () => {
 
   // Open right inspection panel with selected activity details
   const handleInspectArtifact = useCallback((activity: ToolActivity) => {
+    // 1. If activity has Git diff, open diff view
+    if (activity.diff) {
+      setPreviewDiff(activity.diff)
+      setPreviewArtifact(null)
+      setPreviewTerminal(null)
+      setPreviewVerification(null)
+      setIsPreviewOpen(true)
+      return
+    }
+
+    // 2. If activity involves a file, open that exact file's content
+    if (activity.file_path) {
+      const filePath = activity.file_path
+      const filename = filePath.split('/').pop() || filePath
+      const isMd = filename.endsWith('.md')
+
+      apiClient
+        .getFileContent(filePath)
+        .then((res) => {
+          setPreviewArtifact({
+            id: `file-${filePath}`,
+            title: res.name,
+            type: res.is_markdown ? 'markdown' : 'code',
+            content: res.content,
+            file_path: res.path,
+            language: res.language,
+            timestamp: new Date().toISOString(),
+          })
+          setPreviewDiff(null)
+          setPreviewTerminal(null)
+          setPreviewVerification(null)
+          setIsPreviewOpen(true)
+        })
+        .catch(() => {
+          setPreviewArtifact({
+            id: `file-${filePath}`,
+            title: filename,
+            type: isMd ? 'markdown' : 'code',
+            content:
+              activity.output ||
+              `// File: ${filePath}\n// Content could not be loaded from active workspace.`,
+            file_path: filePath,
+            timestamp: new Date().toISOString(),
+          })
+          setPreviewDiff(null)
+          setPreviewTerminal(null)
+          setPreviewVerification(null)
+          setIsPreviewOpen(true)
+        })
+      return
+    }
+
+    // 3. Command execution activity: open terminal tab with command & output
     if (activity.command || activity.output) {
       setPreviewTerminal({
         command: activity.command || activity.operation,
@@ -637,30 +710,6 @@ export const App: React.FC = () => {
       })
       setPreviewArtifact(null)
       setPreviewDiff(null)
-      setPreviewVerification(null)
-      setIsPreviewOpen(true)
-    } else if (activity.file_path) {
-      setPreviewDiff({
-        file_path: activity.file_path,
-        added_lines: 3,
-        removed_lines: 1,
-        chunks: [
-          {
-            old_start: 1,
-            old_lines: 3,
-            new_start: 1,
-            new_lines: 5,
-            lines: [
-              { type: 'context', content: '// File inspection' },
-              { type: 'delete', content: '- Old implementation', old_line_no: 2 },
-              { type: 'add', content: '+ Production-ready fix', new_line_no: 2 },
-              { type: 'context', content: '// Verified' },
-            ],
-          },
-        ],
-      })
-      setPreviewArtifact(null)
-      setPreviewTerminal(null)
       setPreviewVerification(null)
       setIsPreviewOpen(true)
     }
@@ -970,6 +1019,8 @@ export const App: React.FC = () => {
           verification={previewVerification}
           terminalOutput={previewTerminal}
           onOpenDiff={handleOpenDiffReview}
+          workspaceName={currentWorkspace?.name || selectedProject?.name || 'workspace'}
+          workspaceRoot={currentWorkspace?.root_path || selectedProject?.path || 'h:\\chatbot'}
         />
       </main>
 

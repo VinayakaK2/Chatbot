@@ -5069,11 +5069,14 @@
 
 .file-viewer-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
   padding: 0;
   background-color: var(--bg-workspace, #070708);
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .file-viewer-body.is-fit-to-screen {
@@ -5081,10 +5084,13 @@
 }
 
 .file-viewer-raw-content {
+  flex: 1;
+  min-height: 0;
   max-width: 100%;
   width: 100%;
-  height: 100%;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .file-viewer-raw-content .code-block-container {
@@ -5092,13 +5098,25 @@
   border-radius: 0;
   margin: 0;
   background: transparent;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   max-width: 100%;
+  overflow: visible;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .file-viewer-raw-content .code-block-header {
   display: none;
+}
+
+.file-viewer-raw-content .code-block-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .file-viewer-raw-content .code-block-pre {
@@ -5107,6 +5125,7 @@
   font-size: 12.5px;
   line-height: 1.6;
   max-width: 100%;
+  min-height: 100%;
   box-sizing: border-box;
 }
 
@@ -5148,6 +5167,341 @@
   padding: 16px;
   overflow-x: auto;
   color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   INTERACTIVE POWERSHELL TERMINAL VIEW & FILE PICKER
+   ========================================================================== */
+
+.interactive-terminal-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background-color: var(--bg-workspace, #070708);
+  font-family: var(--font-mono, 'Consolas', 'Courier New', monospace);
+  color: #f3f4f6;
+  overflow: hidden;
+}
+
+.terminal-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+
+.terminal-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary, #9ca3af);
+}
+
+.terminal-header-title .terminal-dot.green {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #22c55e;
+}
+
+.terminal-header-path {
+  color: var(--text-muted, #6b7280);
+  font-size: 10.5px;
+}
+
+.terminal-tool-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.terminal-tool-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.terminal-scroll-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.terminal-welcome-banner {
+  color: #6b7280;
+  font-size: 11.5px;
+  line-height: 1.5;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.terminal-banner-sub {
+  margin-top: 4px;
+}
+
+.terminal-code-dir {
+  color: #60a5fa;
+  font-family: inherit;
+}
+
+.terminal-entry-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.terminal-prompt-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.terminal-prompt-prefix {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.terminal-prompt-cwd {
+  color: #9ca3af;
+}
+
+.terminal-prompt-command {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.terminal-entry-duration {
+  color: #6b7280;
+  font-size: 10.5px;
+}
+
+.terminal-status-ok {
+  display: inline-flex;
+  align-items: center;
+  color: #22c55e;
+}
+
+.terminal-status-err {
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.terminal-output-stdout {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e5e7eb;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.terminal-output-stderr {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f87171;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid #ef4444;
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.terminal-running-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #60a5fa;
+  padding: 4px 0;
+}
+
+.terminal-input-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.terminal-input-prompt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.terminal-command-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #ffffff;
+  padding: 4px 0;
+  width: 100%;
+}
+
+.terminal-command-input::placeholder {
+  color: #4b5563;
+}
+
+/* Plus (+) Dropdown and File Picker Modal */
+.file-plus-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  width: 160px;
+  background-color: #121215;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-plus-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary, #ffffff);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s ease;
+}
+
+.file-plus-menu-item:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.workspace-file-picker-overlay {
+  position: absolute;
+  top: 42px;
+  left: 12px;
+  right: 12px;
+  max-height: 440px;
+  background-color: #121215;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+  z-index: 110;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-file-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #f3f4f6;
+}
+
+.workspace-file-picker-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workspace-file-picker-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12.5px;
+  color: #ffffff;
+}
+
+.workspace-file-picker-list {
+  flex: 1;
+  min-height: 120px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.workspace-file-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s ease;
+}
+
+.workspace-file-picker-item:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.workspace-file-picker-item-name {
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.workspace-file-picker-item-path {
+  color: #6b7280;
+  font-size: 11px;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.workspace-file-picker-empty {
+  padding: 24px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 12px;
 }
 
 /* Accessibility: Respect user motion preference */

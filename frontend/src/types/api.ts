@@ -326,6 +326,26 @@ export interface BrowseDirectoryResponse {
   directories: DirectoryItem[]
 }
 
+export interface WorkspaceCommandResponse {
+  command: string
+  working_dir: string
+  exit_code: number
+  stdout: string
+  stderr: string
+  duration_ms: number
+  truncated: boolean
+  timed_out: boolean
+}
+
+export interface WorkspaceFileItem {
+  path: string
+  name: string
+  is_dir: boolean
+  is_markdown: boolean
+  size_bytes: number
+}
+
+
 // ==============================================================================
 // API Error Schemas
 // ==============================================================================

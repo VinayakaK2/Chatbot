@@ -315,3 +315,69 @@ def get_recent_workspaces() -> List[str]:
     if current not in _recent_workspaces:
         _recent_workspaces.insert(0, current)
     return _recent_workspaces
+
+
+class WorkspaceCommandRequest(BaseModel):
+    """Payload to execute an interactive terminal command within the workspace."""
+
+    command: str = Field(..., min_length=1, max_length=4096, description="Command string to execute in terminal")
+    working_dir: Optional[str] = Field(default=None, description="Optional working directory within workspace")
+    timeout_seconds: Optional[float] = Field(default=60.0, ge=1.0, le=300.0, description="Command timeout in seconds")
+
+
+class WorkspaceCommandResponse(BaseModel):
+    """Execution output from local workspace terminal command."""
+
+    command: str
+    working_dir: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: float
+    truncated: bool
+    timed_out: bool
+
+
+@router.post(
+    "/execute-command",
+    response_model=WorkspaceCommandResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute an interactive PowerShell terminal command in the active workspace",
+)
+async def execute_workspace_command(request: WorkspaceCommandRequest) -> WorkspaceCommandResponse:
+    """Execute command in constrained PowerShell runner bounded to active project workspace."""
+    task_service = get_task_service()
+    from tools.shell import PowerShellRunner
+
+    runner = PowerShellRunner(
+        workspace=task_service.workspace_context,
+        default_timeout_seconds=request.timeout_seconds or 60.0,
+    )
+    try:
+        result = await runner.run(
+            command=request.command,
+            working_dir=request.working_dir,
+            timeout_seconds=request.timeout_seconds,
+        )
+        return WorkspaceCommandResponse(
+            command=result.command,
+            working_dir=result.working_dir,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_ms=result.duration_ms,
+            truncated=result.truncated,
+            timed_out=result.timed_out,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid terminal command parameters: {str(exc)}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Terminal command execution error: %s", str(exc), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Terminal command failed: {str(exc)}",
+        ) from exc
+

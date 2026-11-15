@@ -83,3 +83,14 @@ def test_select_workspace_nonexistent(client):
     """Verify POST /api/workspace/select rejects missing paths."""
     resp = client.post("/api/workspace/select", json={"path": "/nonexistent/random/path/12345"})
     assert resp.status_code == 404
+
+
+def test_execute_workspace_command_echo(client):
+    """Verify POST /api/workspace/execute-command executes command in workspace."""
+    resp = client.post("/api/workspace/execute-command", json={"command": "Write-Output 'terminal_hello'"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["exit_code"] == 0
+    assert "terminal_hello" in data["stdout"]
+    assert "working_dir" in data
+
