@@ -142,4 +142,50 @@ describe('useConversations Hook', () => {
     expect(result.current.projects.some((p) => p.id === projBId)).toBe(false)
     expect(result.current.conversations.some((c) => c.project_id === projBId)).toBe(false)
   })
+
+  it('auto-switches selectedProjectId when selectConversation is called with cross-project chat', () => {
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.createProject('Project 1', 'h:/proj1')
+    })
+    const proj1Id = result.current.selectedProjectId!
+    const chat1Id = result.current.activeConversationId!
+
+    act(() => {
+      result.current.createProject('Project 2', 'h:/proj2')
+    })
+    const proj2Id = result.current.selectedProjectId!
+    expect(result.current.selectedProjectId).toBe(proj2Id)
+
+    // Select conversation from Project 1 directly
+    act(() => {
+      result.current.selectConversation(chat1Id)
+    })
+
+    // Should have automatically switched selectedProjectId back to Project 1
+    expect(result.current.selectedProjectId).toBe(proj1Id)
+    expect(result.current.activeConversationId).toBe(chat1Id)
+    expect(result.current.activeConversation?.id).toBe(chat1Id)
+  })
+
+  it('deletes conversation cleanly without phantom regeneration', () => {
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.createProject('Solo Project', 'h:/solo')
+    })
+    const chatId = result.current.activeConversationId!
+    expect(result.current.conversations.length).toBe(1)
+
+    act(() => {
+      result.current.deleteConversation(chatId)
+    })
+
+    // Conversation is removed, not phantom re-created
+    expect(result.current.conversations.some((c) => c.id === chatId)).toBe(false)
+    expect(result.current.conversations.length).toBe(0)
+    expect(result.current.activeConversationId).toBeNull()
+    expect(result.current.activeConversation).toBeNull()
+  })
 })

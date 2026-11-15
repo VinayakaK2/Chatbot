@@ -27,9 +27,9 @@ class TaskCreateRequest(BaseModel):
         description="The task instructions or user prompt to be processed",
     )
     max_tokens: Optional[int] = Field(
-        default=2048,
+        default=16384,
         ge=1,
-        le=8192,
+        le=65536,
         description="Maximum tokens requested from the model",
     )
     temperature: Optional[float] = Field(

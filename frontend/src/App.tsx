@@ -183,6 +183,18 @@ export const App: React.FC = () => {
     [projects, selectProject, refreshGitDiff]
   )
 
+  // Handles selecting a conversation (ensures parent project and workspace sync if cross-project)
+  const handleSelectConversation = useCallback(
+    async (id: string) => {
+      const targetChat = conversations.find((c) => c.id === id)
+      if (targetChat && targetChat.project_id && targetChat.project_id !== selectedProjectId) {
+        await handleSelectProject(targetChat.project_id)
+      }
+      selectConversation(id)
+    },
+    [conversations, selectedProjectId, handleSelectProject, selectConversation]
+  )
+
   // Creates a new conversation strictly within selected project
   const handleNewConversation = useCallback(
     (projectId?: string) => {
@@ -705,7 +717,7 @@ export const App: React.FC = () => {
         runningConversationIds={isExecuting && activeConversationId ? [activeConversationId] : []}
         onSelectProject={handleSelectProject}
         onDeleteProject={deleteProject}
-        onSelectConversation={selectConversation}
+        onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
         onRenameConversation={renameConversation}
         onArchiveConversation={archiveConversation}

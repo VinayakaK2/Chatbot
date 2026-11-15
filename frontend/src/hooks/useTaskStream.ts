@@ -181,7 +181,7 @@ export function useTaskStream(
         // Step 1: Submit task through backend API contract
         const taskResponse: TaskResponse = await apiClient.submitTask({
           prompt,
-          max_tokens: 2048,
+          max_tokens: 16384,
           temperature: 0.2,
         })
 

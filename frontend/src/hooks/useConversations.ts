@@ -219,13 +219,20 @@ export function useConversations() {
     [selectedProjectId]
   )
 
-  // Select active conversation
-  const selectConversation = useCallback((id: string) => {
-    setActiveConversationId(id)
-    setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, unread: false } : c))
-    )
-  }, [])
+  // Select active conversation (and auto-switch active project if cross-project)
+  const selectConversation = useCallback(
+    (id: string) => {
+      const targetChat = conversations.find((c) => c.id === id)
+      if (targetChat && targetChat.project_id && targetChat.project_id !== selectedProjectId) {
+        setSelectedProjectId(targetChat.project_id)
+      }
+      setActiveConversationId(id)
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, unread: false } : c))
+      )
+    },
+    [conversations, selectedProjectId]
+  )
 
   // Rename conversation
   const renameConversation = useCallback((id: string, newTitle: string) => {
@@ -264,27 +271,15 @@ export function useConversations() {
   // Delete conversation
   const deleteConversation = useCallback(
     (id: string) => {
-      setConversations((prev) => {
-        const deleted = prev.find((c) => c.id === id)
-        const filtered = prev.filter((c) => c.id !== id)
-        const projId = deleted?.project_id || selectedProjectId
+      const deleted = conversations.find((c) => c.id === id)
+      const targetProjId = deleted?.project_id || selectedProjectId
 
-        if (projId) {
-          const remainingInProject = filtered.filter((c) => c.project_id === projId)
-          if (remainingInProject.length === 0) {
-            // Keep at least one empty conversation in the project
-            const fresh = createInitialConversation(projId)
-            setActiveConversationId(fresh.id)
-            return [...filtered, fresh]
-          }
-        }
-        return filtered
-      })
+      setConversations((prev) => prev.filter((c) => c.id !== id))
 
       setActiveConversationId((prevId) => {
         if (prevId === id) {
           const remainingInProject = conversations.filter(
-            (c) => c.id !== id && c.project_id === selectedProjectId
+            (c) => c.id !== id && c.project_id === targetProjId
           )
           return remainingInProject[0]?.id || null
         }

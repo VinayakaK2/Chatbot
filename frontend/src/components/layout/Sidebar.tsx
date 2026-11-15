@@ -185,114 +185,115 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
         )}
       </div>
 
-      {/* Trailing area: Actions (hover/focus) vs Status Indicator (normal) */}
-      <div className="chat-item-trailing">
-        {/* Status Indicator or Relative Timestamp */}
-        <div className="chat-status-indicator" aria-hidden="true">
-          {isRunning ? (
-            <span className="chat-spinner" title="Task running" />
-          ) : isUnread ? (
-            <span className="chat-unread-dot" title="Unread updates" />
-          ) : (
-            <span className="chat-item-time">{formatCompactTime(chat.updated_at || chat.created_at)}</span>
-          )}
-        </div>
+      {/* Status Indicator or Relative Timestamp */}
+      <div className="chat-status-indicator" aria-hidden="true">
+        {isRunning ? (
+          <span className="chat-spinner" title="Task running" />
+        ) : isUnread ? (
+          <span className="chat-unread-dot" title="Unread updates" />
+        ) : (
+          <span className="chat-item-time">{formatCompactTime(chat.updated_at || chat.created_at)}</span>
+        )}
+      </div>
 
-        {/* Action Controls (Revealed on hover / focus) */}
-        <div
-          className="chat-item-actions"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
+      {/* Action Controls (Revealed on hover / focus / menu-open) */}
+      <div
+        className={`chat-item-actions ${dropdownOpen ? 'is-menu-open' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        {/* Quick Pin Toggle Button */}
+        <button
+          type="button"
+          className={`chat-action-btn ${chat.pinned ? 'is-pinned' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onTogglePin(chat.id)
+          }}
+          title={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
+          aria-label={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
         >
-          {/* Quick Pin Toggle Button */}
-          <button
-            type="button"
-            className={`chat-action-btn ${chat.pinned ? 'is-pinned' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation()
-              onTogglePin(chat.id)
-            }}
-            title={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
-            aria-label={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
-          >
-            <IconPin size={12} color={chat.pinned ? 'var(--text-primary)' : 'currentColor'} />
-          </button>
+          <IconPin size={12} color={chat.pinned ? 'var(--text-primary)' : 'currentColor'} />
+        </button>
 
-          {/* Context Menu Dropdown */}
-          <Dropdown
-            isOpen={dropdownOpen}
-            onToggle={() => setDropdownOpen((prev) => !prev)}
-            trigger={
-              <button
-                type="button"
-                className="chat-action-btn"
-                title="More options"
-                aria-label="More options"
-                aria-expanded={dropdownOpen}
-              >
-                <IconMoreVertical size={13} />
-              </button>
-            }
-          >
-            {onRename && (
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => {
-                  setDropdownOpen(false)
-                  setIsEditing(true)
-                }}
-                role="menuitem"
-              >
-                <IconEdit size={13} />
-                <span>Rename</span>
-              </button>
-            )}
-
+        {/* Context Menu Dropdown */}
+        <Dropdown
+          isOpen={dropdownOpen}
+          onToggle={() => setDropdownOpen((prev) => !prev)}
+          trigger={
+            <button
+              type="button"
+              className="chat-action-btn"
+              title="More options"
+              aria-label="More options"
+              aria-expanded={dropdownOpen}
+            >
+              <IconMoreVertical size={13} />
+            </button>
+          }
+        >
+          {onRename && (
             <button
               type="button"
               className="dropdown-item"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation()
                 setDropdownOpen(false)
-                onTogglePin(chat.id)
+                setIsEditing(true)
               }}
               role="menuitem"
             >
-              <IconPin size={13} />
-              <span>{chat.pinned ? 'Unpin' : 'Pin'}</span>
+              <IconEdit size={13} />
+              <span>Rename</span>
             </button>
+          )}
 
-            {onArchive && (
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => {
-                  setDropdownOpen(false)
-                  onArchive(chat.id)
-                }}
-                role="menuitem"
-              >
-                <IconArchive size={13} />
-                <span>{chat.archived ? 'Unarchive' : 'Archive'}</span>
-              </button>
-            )}
+          <button
+            type="button"
+            className="dropdown-item"
+            onClick={(e) => {
+              e.stopPropagation()
+              setDropdownOpen(false)
+              onTogglePin(chat.id)
+            }}
+            role="menuitem"
+          >
+            <IconPin size={13} />
+            <span>{chat.pinned ? 'Unpin' : 'Pin'}</span>
+          </button>
 
-            <div className="dropdown-divider" />
-
+          {onArchive && (
             <button
               type="button"
-              className="dropdown-item danger"
-              onClick={() => {
+              className="dropdown-item"
+              onClick={(e) => {
+                e.stopPropagation()
                 setDropdownOpen(false)
-                onDelete(chat.id)
+                onArchive(chat.id)
               }}
               role="menuitem"
             >
-              <IconTrash size={13} />
-              <span>Delete</span>
+              <IconArchive size={13} />
+              <span>{chat.archived ? 'Unarchive' : 'Archive'}</span>
             </button>
-          </Dropdown>
-        </div>
+          )}
+
+          <div className="dropdown-divider" />
+
+          <button
+            type="button"
+            className="dropdown-item danger"
+            onClick={(e) => {
+              e.stopPropagation()
+              setDropdownOpen(false)
+              onDelete(chat.id)
+            }}
+            role="menuitem"
+          >
+            <IconTrash size={13} />
+            <span>Delete</span>
+          </button>
+        </Dropdown>
       </div>
     </div>
   )

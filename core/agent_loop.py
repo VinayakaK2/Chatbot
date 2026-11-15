@@ -124,9 +124,9 @@ class AgentExecutionRequest(BaseModel):
         description="Maximum total tool calls permitted across the task",
     )
     max_tokens: int = Field(
-        default=2048,
+        default=16384,
         ge=1,
-        le=8192,
+        le=65536,
         description="Max tokens requested per model turn",
     )
     temperature: float = Field(

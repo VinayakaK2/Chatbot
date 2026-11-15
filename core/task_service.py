@@ -718,7 +718,7 @@ class TaskService:
             system_prompt=effective_system_prompt,
             max_iterations=self.settings.agent_max_iterations,
             max_tool_calls=self.settings.agent_max_tool_calls,
-            max_tokens=request.max_tokens or 2048,
+            max_tokens=request.max_tokens or 16384,
             temperature=request.temperature if request.temperature is not None else 0.2,
             task_timeout_seconds=self.settings.agent_task_timeout_seconds,
             tool_timeout_seconds=self.settings.agent_tool_timeout_seconds,
