@@ -152,7 +152,7 @@ An independent audit was conducted on the Phase 7 implementation to verify:
 - **Finding:** Migration 002 must handle existing databases with pre-existing columns or duplicate `parent_task_id` continuations without silently deleting records.
 - **Audited Solution:**
   1. `PRAGMA table_info` checks prevent failure if `parent_task_id` already exists.
-  2. Prior to index installation, duplicate continuations are discovered and re-parented into a chronological linear chain (`P -> C1 -> C2 -> ...`), logging state transition audit records.
+  2. Prior to index installation, duplicate continuations are discovered: the earliest continuation keeps `parent_task_id = P` (true causal parentage), while subsequent concurrent duplicates have `parent_task_id` set to `NULL` (safely detached), logging state transition audit records with full provenance without fabricating false parentage.
   3. **Zero historical task rows or transcripts are deleted**.
   4. Tested on clean v1, v2 without continuations, valid continuations, and duplicate continuation databases.
 - **Test Evidence:**

@@ -457,13 +457,13 @@ Credential sanitization (`redact_secrets`) is applied on all database write path
 - Upgrading from v1 (`001_initial_schema`) to v2 (`002_immutability_triggers_and_continuations`) preserves 100% of existing rows without data loss.
 - **Migration Compatibility & Non-Destructive Continuation Deduplication:**
   - `_apply_migration_002` checks `PRAGMA table_info` before executing `ALTER TABLE tasks ADD COLUMN parent_task_id`, ensuring smooth upgrades on existing databases where the column was already defined.
-  - If pre-v2 data contains duplicate `parent_task_id` relationships (e.g. from historical uncoordinated continuation creation), Migration 002 resolves the duplicate continuation tasks by re-parenting them into a chronological linear chain (`P -> C1 -> C2 -> ...`), recording a state transition audit log for each re-parented task.
+  - If pre-v2 data contains duplicate `parent_task_id` relationships (e.g. from historical uncoordinated concurrent continuation creation), Migration 002 preserves genuine causal lineage: the earliest primary continuation retains `parent_task_id = P`, while subsequent concurrent duplicate attempts have `parent_task_id` set to `NULL` (detached), recording state transition audit records with full provenance. This prevents manufacturing a false causal parent-child hierarchy between concurrent sibling tasks while strictly satisfying the partial unique index (`WHERE parent_task_id IS NOT NULL`).
   - **Zero historical task records or transcripts are deleted** to make the migration pass.
   - Tested across:
     1. Clean v1 schema database.
     2. v2 database with no continuation records (idempotent).
     3. Database with valid continuation records (all preserved).
-    4. Database with duplicate continuation relationships (100% records preserved, linear chain created, unique index active).
+    4. Database with duplicate continuation relationships (100% records preserved, genuine causal lineage preserved, unique index active).
 - In-flight migration failures abort via transactional rollback, leaving the schema clean without orphan tables.
 
 ### 4.5 F7-05: Runtime-Owned Tool Classification Authority

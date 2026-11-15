@@ -195,11 +195,12 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 - **Threat:** Migration failure on `CREATE UNIQUE INDEX`, or naive migrations silently deleting historical task rows to pass constraint checks.
 - **Defense Implementation:**
   - Migration 002 inspects existing continuations before index creation.
-  - Duplicate continuations are chronologically re-parented into a valid linear chain (`P -> C1 -> C2 -> ...`), inserting audit records into `state_transitions`.
+  - The earliest primary continuation retains `parent_task_id = P` (true causal parentage), while subsequent duplicate concurrent attempts have `parent_task_id` set to `NULL` (safely detached), inserting audit records into `state_transitions` with provenance.
+  - This avoids manufacturing false parent-child relationships between concurrent sibling tasks.
   - Zero historical task rows, transcripts, or execution records are deleted.
 - **Observed Evidence:**
   - Tested on a database with 3 duplicate continuation records: migration succeeds cleanly without error.
-  - All 4 tasks (parent + 3 children) and their transcripts remain present; linear lineage is reconstructed; unique partial index activates successfully.
+  - All 4 tasks (parent + 3 children) and their transcripts remain present; true causal lineage is preserved; unique partial index activates successfully.
 - **Test Proof:**
   - `tests/test_persistence.py::test_migration_compatibility_clean_v1_database` (PASS)
   - `tests/test_persistence.py::test_migration_compatibility_v2_database_no_continuations` (PASS)

@@ -295,27 +295,20 @@ class MigrationRunner:
             if len(children) <= 1:
                 continue
 
-            # First child remains linked to parent_id (winner/primary continuation)
-            # Subsequent duplicate children are chained to form a valid linear lineage
-            current_parent_id = children[0][0]
+            # First child remains linked to parent_id (genuine winning continuation with true causal parentage)
+            # Subsequent duplicate children were concurrent uncoordinated attempts on the same parent.
+            # Manufacturing a fake parent-child relationship (e.g. C1 -> C2) violates causal integrity.
+            # Instead, duplicate continuations are safely detached (parent_task_id = NULL) while preserving
+            # all rows, transcripts, tool executions, and audit records with full historical provenance.
+            primary_continuation_id = children[0][0]
             for dup_row in children[1:]:
                 dup_id = dup_row[0]
                 dup_status = dup_row[1]
 
-                # Find tail of chain starting from current_parent_id to avoid creating new duplicates
-                tail_id = current_parent_id
-                while True:
-                    cursor.execute("SELECT id FROM tasks WHERE parent_task_id = ? LIMIT 1;", (tail_id,))
-                    next_child = cursor.fetchone()
-                    if next_child and next_child[0] != dup_id:
-                        tail_id = next_child[0]
-                    else:
-                        break
-
-                # Re-link duplicate to tail_id
+                # Detach duplicate continuation from parent_id to satisfy unique partial index without fabricating false parentage
                 cursor.execute(
-                    "UPDATE tasks SET parent_task_id = ? WHERE id = ?;",
-                    (tail_id, dup_id),
+                    "UPDATE tasks SET parent_task_id = NULL WHERE id = ?;",
+                    (dup_id,),
                 )
                 now_iso = datetime.now(timezone.utc).isoformat()
                 cursor.execute(
@@ -328,17 +321,16 @@ class MigrationRunner:
                         dup_id,
                         dup_status,
                         dup_status,
-                        f"Migration 002: Re-parented duplicate continuation of parent {parent_id} to {tail_id} to enforce uniqueness without record deletion",
+                        f"Migration 002: Detached duplicate concurrent continuation of parent {parent_id} (primary continuation: {primary_continuation_id}) to preserve genuine causal lineage without manufacturing false parentage or deleting historical records",
                         now_iso,
                     ),
                 )
                 logger.warning(
-                    "Migration 002: Re-linked duplicate continuation task %s (parent was %s) to %s to satisfy uniqueness constraint without deleting records",
+                    "Migration 002: Detached duplicate continuation task %s of parent %s (primary is %s) to preserve genuine causal lineage without deleting records",
                     dup_id,
                     parent_id,
-                    tail_id,
+                    primary_continuation_id,
                 )
-                current_parent_id = dup_id
 
         # 3. Create unique partial index
         cursor.execute(

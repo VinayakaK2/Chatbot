@@ -866,25 +866,27 @@ def test_migration_compatibility_duplicate_continuation_records_no_silent_deleti
         msg_count = conn.execute("SELECT count(*) FROM transcript_messages;").fetchone()[0]
         assert msg_count == 3, "All child transcripts preserved"
 
-        # Verify linear lineage was reconstructed:
-        # child-dup-1 kept parent-dup
-        # child-dup-2 re-parented to child-dup-1
-        # child-dup-3 re-parented to child-dup-2
+        # Verify true causal lineage is preserved without fabricating false parentage:
+        # child-dup-1 (earliest/winning continuation) keeps parent-dup as its causal parent
+        # child-dup-2 and child-dup-3 are safely detached (parent_task_id = NULL) to satisfy uniqueness
+        # without manufacturing a fake causal chain between concurrent sibling tasks!
         c1_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-1';").fetchone()[0]
         c2_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-2';").fetchone()[0]
         c3_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-3';").fetchone()[0]
 
-        assert c1_parent == "parent-dup"
-        assert c2_parent == "child-dup-1"
-        assert c3_parent == "child-dup-2"
+        assert c1_parent == "parent-dup", "Primary continuation retains true causal parentage"
+        assert c2_parent is None, "Duplicate concurrent continuation detached; no manufactured parentage"
+        assert c3_parent is None, "Duplicate concurrent continuation detached; no manufactured parentage"
 
-        # Verify audit records in state_transitions exist for the re-parented tasks
+        # Verify audit records in state_transitions exist for the detached tasks documenting provenance
         reparent_transitions = conn.execute(
             "SELECT entity_id, reason FROM state_transitions WHERE actor = 'migration_002' ORDER BY entity_id ASC;"
         ).fetchall()
         assert len(reparent_transitions) == 2
         assert reparent_transitions[0][0] == "child-dup-2"
+        assert "Detached duplicate concurrent continuation of parent parent-dup (primary continuation: child-dup-1)" in reparent_transitions[0][1]
         assert reparent_transitions[1][0] == "child-dup-3"
+        assert "Detached duplicate concurrent continuation of parent parent-dup (primary continuation: child-dup-1)" in reparent_transitions[1][1]
 
         # Verify unique index uq_tasks_parent_task is active and blocks new duplicates
         with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
