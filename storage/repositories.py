@@ -15,6 +15,7 @@ from storage.models import (
     ExecutionState,
     MessageRole,
     ModelCallRecord,
+    PersistedEventRecord,
     RecoveryStatus,
     SessionRecord,
     SessionStatus,
@@ -22,6 +23,9 @@ from storage.models import (
     TaskRecord,
     ToolExecutionRecord,
     TranscriptMessageRecord,
+    VerificationRecord,
+    VerificationStatus,
+    VerificationType,
 )
 from tools.security import redact_secrets
 
@@ -171,14 +175,18 @@ class TaskRepository:
         clean_err = redact_secrets(task.error) if task.error else None
         clean_term = redact_secrets(task.termination_reason) if task.termination_reason else None
 
+        v_status = task.verification_status.value if hasattr(task, "verification_status") and task.verification_status else VerificationStatus.NOT_RUN.value
+        corr_id = task.correlation_id if hasattr(task, "correlation_id") else None
+
         with self.db.transaction() as conn:
             conn.execute(
                 """
                 INSERT INTO tasks (
                     id, session_id, parent_task_id, prompt, status, recovery_status, response_text,
                     finish_reason, model, usage_json, error, iterations, tool_calls_count,
-                    termination_reason, created_at, started_at, completed_at, version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    termination_reason, created_at, started_at, completed_at, version,
+                    verification_status, correlation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     task.id,
@@ -199,6 +207,8 @@ class TaskRepository:
                     task.started_at,
                     task.completed_at,
                     task.version,
+                    v_status,
+                    corr_id,
                 ),
             )
             # Record initial creation transition
@@ -220,6 +230,24 @@ class TaskRepository:
             )
         return self.get(task.id)
 
+    def _enrich_task_row(self, cursor: sqlite3.Cursor, d: Dict[str, Any]) -> TaskRecord:
+        """Enrich database row dict with parsed enums and latest verification record status."""
+        d["status"] = TaskStatus(d["status"])
+        if d.get("recovery_status"):
+            d["recovery_status"] = RecoveryStatus(d["recovery_status"])
+        
+        # Check verification_records for the authoritative latest verification outcome
+        task_id = d["id"]
+        cursor.execute("SELECT result FROM verification_records WHERE task_id = ? ORDER BY created_at DESC LIMIT 1;", (task_id,))
+        vrow = cursor.fetchone()
+        if vrow:
+            d["verification_status"] = VerificationStatus(vrow[0])
+        elif d.get("verification_status"):
+            d["verification_status"] = VerificationStatus(d["verification_status"])
+        else:
+            d["verification_status"] = VerificationStatus.NOT_RUN
+        return TaskRecord(**d)
+
     def get(self, task_id: str) -> Optional[TaskRecord]:
         """Retrieve task record by ID."""
         conn = self.db.get_connection()
@@ -228,11 +256,7 @@ class TaskRepository:
         row = cursor.fetchone()
         if not row:
             return None
-        d = _row_to_dict(row)
-        d["status"] = TaskStatus(d["status"])
-        if d.get("recovery_status"):
-            d["recovery_status"] = RecoveryStatus(d["recovery_status"])
-        return TaskRecord(**d)
+        return self._enrich_task_row(cursor, _row_to_dict(row))
 
     def get_by_parent_task_id(self, parent_task_id: str) -> Optional[TaskRecord]:
         """Retrieve the continuation task record linked to a given parent task ID, if one exists."""
@@ -242,11 +266,7 @@ class TaskRepository:
         row = cursor.fetchone()
         if not row:
             return None
-        d = _row_to_dict(row)
-        d["status"] = TaskStatus(d["status"])
-        if d.get("recovery_status"):
-            d["recovery_status"] = RecoveryStatus(d["recovery_status"])
-        return TaskRecord(**d)
+        return self._enrich_task_row(cursor, _row_to_dict(row))
 
     def list_for_session(self, session_id: str) -> List[TaskRecord]:
         """List tasks belonging to a session in chronological order."""
@@ -256,14 +276,7 @@ class TaskRepository:
             "SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC;",
             (session_id,),
         )
-        results: List[TaskRecord] = []
-        for row in cursor.fetchall():
-            d = _row_to_dict(row)
-            d["status"] = TaskStatus(d["status"])
-            if d.get("recovery_status"):
-                d["recovery_status"] = RecoveryStatus(d["recovery_status"])
-            results.append(TaskRecord(**d))
-        return results
+        return [self._enrich_task_row(cursor, _row_to_dict(row)) for row in cursor.fetchall()]
 
     def transition_state(
         self,
@@ -595,6 +608,8 @@ class ToolExecutionRepository:
         arguments: Any,
         is_mutation: bool = False,
         idempotent: bool = False,
+        correlation_id: Optional[str] = None,
+        retry_count: int = 0,
     ) -> ToolExecutionRecord:
         """Log the initiation of a tool invocation before dispatching to execution environment."""
         if isinstance(arguments, dict):
@@ -615,6 +630,8 @@ class ToolExecutionRepository:
             execution_state=ExecutionState.STARTED,
             is_mutation=is_mutation,
             idempotent=idempotent,
+            correlation_id=correlation_id,
+            retry_count=retry_count,
             created_at=now_iso,
             started_at=now_iso,
         )
@@ -624,8 +641,9 @@ class ToolExecutionRepository:
                 """
                 INSERT INTO tool_executions (
                     id, task_id, call_id, tool_name, arguments_json,
-                    execution_state, is_mutation, idempotent, created_at, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    execution_state, is_mutation, idempotent, created_at, started_at,
+                    correlation_id, retry_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     record.id,
@@ -638,6 +656,8 @@ class ToolExecutionRepository:
                     1 if record.idempotent else 0,
                     record.created_at,
                     record.started_at,
+                    record.correlation_id,
+                    record.retry_count,
                 ),
             )
         return record
@@ -765,8 +785,9 @@ class ModelCallRepository:
                 """
                 INSERT INTO model_calls (
                     id, task_id, iteration, model, prompt_tokens,
-                    completion_tokens, total_tokens, finish_reason, latency_ms, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    completion_tokens, total_tokens, finish_reason, latency_ms, created_at,
+                    request_id, correlation_id, retry_count, failure_category
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     call.id,
@@ -779,6 +800,10 @@ class ModelCallRepository:
                     call.finish_reason,
                     call.latency_ms,
                     call.created_at,
+                    call.request_id,
+                    call.correlation_id,
+                    call.retry_count,
+                    call.failure_category,
                 ),
             )
         return call
@@ -793,11 +818,17 @@ class ModelCallRepository:
         duration_ms: float,
         finish_reason: Optional[str] = None,
         turn_number: int = 1,
+        request_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        retry_count: int = 0,
+        failure_category: Optional[str] = None,
     ) -> ModelCallRecord:
         """Create and record a model completion telemetry entry."""
         rec = ModelCallRecord(
             id=str(uuid.uuid4()),
             task_id=task_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
             iteration=turn_number,
             model=model_name,
             prompt_tokens=prompt_tokens,
@@ -805,6 +836,8 @@ class ModelCallRepository:
             total_tokens=total_tokens,
             finish_reason=finish_reason,
             latency_ms=duration_ms,
+            retry_count=retry_count,
+            failure_category=failure_category,
         )
         return self.record(rec)
 
@@ -955,3 +988,195 @@ class ApprovalRepository:
         return count
 
     expire_all_pending = invalidate_pending_approvals
+
+
+class VerificationRepository:
+    """Repository managing trusted verification execution records."""
+
+    def __init__(self, db: DatabaseManager, extra_secrets: Optional[List[str]] = None) -> None:
+        self.db = db
+        self.extra_secrets = extra_secrets or []
+
+    def create(self, record: VerificationRecord) -> VerificationRecord:
+        """Persist a verification record with secret scrubbing and output truncation."""
+        clean_command = redact_secrets(record.command, extra_secrets=self.extra_secrets)
+        clean_excerpt = redact_secrets(record.output_excerpt, extra_secrets=self.extra_secrets) if record.output_excerpt else None
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO verification_records (
+                    id, task_id, verification_type, command, exit_code,
+                    result, output_excerpt, duration_ms, correlation_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    record.id,
+                    record.task_id,
+                    record.verification_type.value,
+                    clean_command,
+                    record.exit_code,
+                    record.result.value,
+                    clean_excerpt,
+                    record.duration_ms,
+                    record.correlation_id,
+                    record.created_at,
+                ),
+            )
+        return record
+
+    def record_verification(
+        self,
+        task_id: str,
+        verification_type: VerificationType,
+        command: str,
+        result: VerificationStatus,
+        exit_code: Optional[int] = None,
+        output_excerpt: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+    ) -> VerificationRecord:
+        """Factory helper creating and persisting an authoritative verification record."""
+        rec = VerificationRecord(
+            id=str(uuid.uuid4()),
+            task_id=task_id,
+            verification_type=verification_type,
+            command=command,
+            exit_code=exit_code,
+            result=result,
+            output_excerpt=output_excerpt,
+            duration_ms=duration_ms,
+            correlation_id=correlation_id,
+        )
+        return self.create(rec)
+
+    def get(self, record_id: str) -> Optional[VerificationRecord]:
+        """Retrieve a verification record by ID."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM verification_records WHERE id = ?;", (record_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        d = _row_to_dict(row)
+        d["verification_type"] = VerificationType(d["verification_type"])
+        d["result"] = VerificationStatus(d["result"])
+        return VerificationRecord(**d)
+
+    def list_for_task(self, task_id: str) -> List[VerificationRecord]:
+        """List all verification records for a specific task in chronological order."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM verification_records WHERE task_id = ? ORDER BY created_at ASC;",
+            (task_id,),
+        )
+        results: List[VerificationRecord] = []
+        for row in cursor.fetchall():
+            d = _row_to_dict(row)
+            d["verification_type"] = VerificationType(d["verification_type"])
+            d["result"] = VerificationStatus(d["result"])
+            results.append(VerificationRecord(**d))
+        return results
+
+    def list_by_correlation(self, correlation_id: str) -> List[VerificationRecord]:
+        """List verification records matching a correlation ID."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM verification_records WHERE correlation_id = ? ORDER BY created_at ASC;",
+            (correlation_id,),
+        )
+        results: List[VerificationRecord] = []
+        for row in cursor.fetchall():
+            d = _row_to_dict(row)
+            d["verification_type"] = VerificationType(d["verification_type"])
+            d["result"] = VerificationStatus(d["result"])
+            results.append(VerificationRecord(**d))
+        return results
+
+
+class RuntimeEventRepository:
+    """Repository managing structured runtime lifecycle events."""
+
+    def __init__(self, db: DatabaseManager, extra_secrets: Optional[List[str]] = None) -> None:
+        self.db = db
+        self.extra_secrets = extra_secrets or []
+
+    def append_event(self, event: PersistedEventRecord) -> PersistedEventRecord:
+        """Persist a structured runtime lifecycle event."""
+        clean_payload = redact_secrets(event.payload_json, extra_secrets=self.extra_secrets) if event.payload_json else "{}"
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_events (
+                    id, event_type, task_id, session_id, correlation_id,
+                    parent_event_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    event.id,
+                    event.event_type,
+                    event.task_id,
+                    event.session_id,
+                    event.correlation_id,
+                    event.parent_event_id,
+                    clean_payload,
+                    event.created_at,
+                ),
+            )
+        return event
+
+    def create_event(
+        self,
+        event_type: str,
+        task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        parent_event_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> PersistedEventRecord:
+        """Factory helper creating and persisting a runtime lifecycle event."""
+        payload_str = json.dumps(payload or {})
+        rec = PersistedEventRecord(
+            id=str(uuid.uuid4()),
+            event_type=event_type,
+            task_id=task_id,
+            session_id=session_id,
+            correlation_id=correlation_id,
+            parent_event_id=parent_event_id,
+            payload_json=payload_str,
+        )
+        return self.append_event(rec)
+
+    def list_for_task(self, task_id: str) -> List[PersistedEventRecord]:
+        """List all runtime events for a specific task in chronological order."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM runtime_events WHERE task_id = ? ORDER BY created_at ASC;",
+            (task_id,),
+        )
+        return [PersistedEventRecord(**_row_to_dict(row)) for row in cursor.fetchall()]
+
+    def list_for_session(self, session_id: str) -> List[PersistedEventRecord]:
+        """List all runtime events for a specific session in chronological order."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM runtime_events WHERE session_id = ? ORDER BY created_at ASC;",
+            (session_id,),
+        )
+        return [PersistedEventRecord(**_row_to_dict(row)) for row in cursor.fetchall()]
+
+    def list_by_correlation(self, correlation_id: str) -> List[PersistedEventRecord]:
+        """List all runtime events matching a correlation ID."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM runtime_events WHERE correlation_id = ? ORDER BY created_at ASC;",
+            (correlation_id,),
+        )
+        return [PersistedEventRecord(**_row_to_dict(row)) for row in cursor.fetchall()]
+

@@ -50,6 +50,10 @@ class TaskCreateRequest(BaseModel):
         default=None,
         description="Optional parent task UUID if this is a continuation task",
     )
+    correlation_id: Optional[str] = Field(
+        default=None,
+        description="Optional root trace correlation ID",
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -73,11 +77,19 @@ class TaskResponse(BaseModel):
         default=None,
         description="Optional parent task UUID if this is a continuation task",
     )
+    correlation_id: Optional[str] = Field(
+        default=None,
+        description="Optional root trace correlation ID",
+    )
     prompt: str = Field(..., description="The original submitted prompt")
     status: TaskStatus = Field(..., description="Current execution status of the task")
     recovery_status: Optional[str] = Field(
         default=None,
         description="Recovery classification (e.g. clean, interrupted_safe, needs_review)",
+    )
+    verification_status: Optional[str] = Field(
+        default="not_run",
+        description="Authoritative independent verification result ('not_run', 'passed', 'failed', 'inconclusive', 'blocked')",
     )
     response_text: Optional[str] = Field(
         default=None,
@@ -118,4 +130,8 @@ class TaskResponse(BaseModel):
     completed_at: Optional[str] = Field(
         default=None,
         description="ISO 8601 UTC completion timestamp",
+    )
+    duration_seconds: Optional[float] = Field(
+        default=None,
+        description="Total execution wall-clock duration in seconds",
     )

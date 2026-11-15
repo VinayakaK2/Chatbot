@@ -60,6 +60,7 @@ export interface TaskResponse {
   termination_reason?: string | null
   created_at: string
   completed_at: string | null
+  duration_seconds?: number | null
 }
 
 // ==============================================================================
@@ -255,6 +256,8 @@ export interface Message {
   artifacts?: ArtifactRecord[]
   pending_approval?: PendingApproval
   attachments?: AttachedFile[]
+  duration_seconds?: number
+  thinking?: string
   error?: string
 }
 

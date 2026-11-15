@@ -25,6 +25,14 @@ from core.context_models import (
     ContextBudgetConfig,
     MandatoryContextOverflowError,
 )
+from core.loop_detector import LoopDetector
+from core.observability import (
+    EventType,
+    StructuredEventEmitter,
+    correlation_context,
+    get_correlation_id,
+)
+from core.retry import FailureCategory, RetryPolicy, classify_error
 from model.contracts import ModelError, ModelProvider, ModelResponse
 from storage.models import ExecutionState, ModelCallRecord, TranscriptMessageRecord
 from storage.repositories import (
@@ -66,7 +74,6 @@ DEFAULT_SYSTEM_PROMPT: str = """You are a helpful, conversational, and highly sk
 COMMUNICATION INSTRUCTIONS:
 1. GREETINGS & CASUAL CONVERSATION:
    - When the user greets you (e.g., 'hi', 'hello', 'hey', 'good morning', etc.), always greet them back naturally, warmly, and briefly!
-   - Example greeting response: "Hello! How can I help you with your code or project today?"
    - Keep greetings simple and polite (1-2 sentences).
    - NEVER respond to a greeting with robotic system status notices (e.g., 'Ready for Development', 'System Initialized'), boot banners, or unsolicited capability lists.
 
@@ -83,6 +90,9 @@ COMMUNICATION INSTRUCTIONS:
 
 3. TOOL USAGE:
    - Tool calls and execution are handled by the runtime harness. Do not output raw tool execution JSON payloads inside your conversational text.
+
+4. REASONING & THINKING PROCESS:
+   - Before executing tools or delivering complex technical solutions, express your concise reasoning, analysis, and plan inside <think>...</think> tags.
 """
 
 
@@ -149,6 +159,26 @@ class AgentExecutionRequest(BaseModel):
         default=None,
         description="Optional allowlist of tool names exposed to the model",
     )
+    correlation_id: Optional[str] = Field(
+        default=None,
+        description="Root or current trace correlation ID",
+    )
+    model_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        le=600.0,
+        description="Wall-clock timeout for individual upstream model completion requests",
+    )
+    max_model_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts for transient upstream model failures",
+    )
+    event_emitter: Optional[Any] = Field(
+        default=None,
+        description="StructuredEventEmitter instance for persistence and subscribers",
+    )
 
 
 class AgentExecutionResult(BaseModel):
@@ -166,6 +196,7 @@ class AgentExecutionResult(BaseModel):
     model: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    correlation_id: Optional[str] = None
     termination_reason: str
 
 
@@ -266,6 +297,8 @@ class AgentLoop:
         tool_execution_repo: Optional[ToolExecutionRepository] = None,
         model_call_repo: Optional[ModelCallRepository] = None,
         transcript_repo: Optional[TranscriptRepository] = None,
+        event_emitter: Optional[StructuredEventEmitter] = None,
+        loop_detector: Optional[LoopDetector] = None,
     ) -> None:
         """Initialize the agent loop with model provider, tool dispatcher, registry, context manager, and storage repos."""
         self.model_provider = model_provider
@@ -276,6 +309,8 @@ class AgentLoop:
         self.tool_execution_repo = tool_execution_repo
         self.model_call_repo = model_call_repo
         self.transcript_repo = transcript_repo
+        self.event_emitter = event_emitter
+        self.loop_detector = loop_detector
 
     def _record_transcript_msg(self, task_id: str, msg: AgentMessage, seq_num: int) -> None:
         """Persist a message turn to the durable transcript if repository is configured."""
@@ -306,28 +341,60 @@ class AgentLoop:
         event_type: RuntimeEventType,
         payload: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Construct and dispatch an immutable runtime lifecycle event to the event sink."""
-        if not request.event_sink:
-            return
+        """Construct and dispatch an immutable runtime lifecycle event to the event sink and structured emitter."""
+        effective_cid = request.correlation_id or get_correlation_id()
+        if request.event_sink:
+            event = RuntimeEvent(
+                event_id=str(uuid.uuid4()),
+                task_id=request.task_id,
+                correlation_id=effective_cid,
+                event_type=event_type,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                payload=payload or {},
+            )
+            try:
+                res = request.event_sink(event)
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception as exc:
+                logger.warning("Event sink exception on task %s: %s", request.task_id, str(exc))
 
-        event = RuntimeEvent(
-            event_id=str(uuid.uuid4()),
-            task_id=request.task_id,
-            event_type=event_type,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            payload=payload or {},
-        )
-        try:
-            res = request.event_sink(event)
-            if asyncio.iscoroutine(res):
-                asyncio.create_task(res)
-        except Exception as exc:
-            logger.warning("Event sink exception on task %s: %s", request.task_id, str(exc))
+        effective_emitter = self.event_emitter or request.event_emitter
+        if effective_emitter:
+            try:
+                effective_emitter.emit(
+                    event_type=event_type.value if hasattr(event_type, "value") else str(event_type),
+                    task_id=request.task_id,
+                    correlation_id=effective_cid,
+                    payload=payload or {},
+                )
+            except Exception as exc:
+                logger.debug("Structured emitter exception on task %s: %s", request.task_id, str(exc))
 
     async def run(self, request: AgentExecutionRequest) -> AgentExecutionResult:
         """Execute the multi-turn agent loop until a valid terminal condition is satisfied."""
         start_time = time.perf_counter()
-        logger.info("Initiating AgentLoop for task '%s' (max_iter=%d)", request.task_id, request.max_iterations)
+        effective_cid = request.correlation_id or get_correlation_id()
+        request.correlation_id = effective_cid
+        effective_loop_detector = self.loop_detector or LoopDetector()
+
+        with correlation_context(correlation_id=effective_cid, task_id=request.task_id):
+            return await self._run_loop(request, effective_cid, effective_loop_detector, start_time)
+
+    async def _run_loop(
+        self,
+        request: AgentExecutionRequest,
+        effective_cid: str,
+        effective_loop_detector: LoopDetector,
+        start_time: float,
+    ) -> AgentExecutionResult:
+        """Internal execution body running within bound correlation context."""
+        logger.info(
+            "Initiating AgentLoop for task '%s' (corr=%s, max_iter=%d)",
+            request.task_id,
+            effective_cid,
+            request.max_iterations,
+        )
 
         # 1. Assemble Initial Conversation History
         history: List[AgentMessage] = []
@@ -376,6 +443,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=f"Task exceeded execution time limit of {request.task_timeout_seconds}s.",
+                    correlation_id=effective_cid,
                     termination_reason="task_timeout",
                 )
 
@@ -397,6 +465,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error="Task was cancelled by user.",
+                    correlation_id=effective_cid,
                     termination_reason="cancelled",
                 )
 
@@ -418,6 +487,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=f"Task reached maximum allowed iterations limit ({request.max_iterations}).",
+                    correlation_id=effective_cid,
                     termination_reason="max_iterations",
                 )
 
@@ -458,6 +528,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=exc.message,
+                    correlation_id=effective_cid,
                     termination_reason="mandatory_context_overflow",
                 )
 
@@ -474,16 +545,90 @@ class AgentLoop:
             )
 
             model_call_start = time.perf_counter()
+            retries_attempted = 0
+            retry_policy = RetryPolicy(max_retries=request.max_model_retries)
+
+            async def _invoke_model_provider() -> ModelResponse:
+                return await asyncio.wait_for(
+                    self.model_provider.generate(
+                        prompt=request.prompt,
+                        max_tokens=request.max_tokens,
+                        temperature=request.temperature,
+                        messages=assembled_messages,
+                        tools=tool_schemas if tool_schemas else None,
+                    ),
+                    timeout=request.model_timeout_seconds,
+                )
+
+            def _on_retry_handler(attempt: int, err: Exception, cat: FailureCategory, delay: float) -> None:
+                nonlocal retries_attempted
+                retries_attempted = attempt
+                self._emit_event(
+                    request,
+                    RuntimeEventType.MODEL_RETRY_SCHEDULED,
+                    {"attempt": attempt, "category": cat.value, "delay_seconds": delay, "error": str(err)},
+                )
+
             try:
-                model_response = await self.model_provider.generate(
-                    prompt=request.prompt,  # fallback for single-prompt adapters
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    messages=assembled_messages,
-                    tools=tool_schemas if tool_schemas else None,
+                model_response = await retry_policy.execute_with_retry(
+                    _invoke_model_provider,
+                    is_idempotent=True,
+                    on_retry=_on_retry_handler,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Model request timed out on turn %d (%.1fs limit)", iterations, request.model_timeout_seconds)
+                model_latency_ms = (time.perf_counter() - model_call_start) * 1000.0
+                if self.model_call_repo:
+                    try:
+                        self.model_call_repo.record_call(
+                            task_id=request.task_id,
+                            model_name=last_model_id or "unknown",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            duration_ms=model_latency_ms,
+                            finish_reason="timeout",
+                            turn_number=iterations,
+                            correlation_id=effective_cid,
+                            retry_count=retries_attempted,
+                            failure_category=FailureCategory.TIMEOUT.value,
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to record model call timeout telemetry: %s", str(exc))
+                return AgentExecutionResult(
+                    task_id=request.task_id,
+                    status=TaskStatus.FAILED,
+                    final_response=None,
+                    iterations=iterations,
+                    tool_calls_count=total_tool_calls,
+                    history=history,
+                    model=last_model_id,
+                    usage=accumulated_usage,
+                    error=f"Model call exceeded timeout limit of {request.model_timeout_seconds:.1f}s.",
+                    correlation_id=effective_cid,
+                    termination_reason="model_timeout",
                 )
             except ModelError as err:
                 logger.error("Model provider error on turn %d: %s", iterations, err.message)
+                model_latency_ms = (time.perf_counter() - model_call_start) * 1000.0
+                cat = classify_error(err)
+                if self.model_call_repo:
+                    try:
+                        self.model_call_repo.record_call(
+                            task_id=request.task_id,
+                            model_name=last_model_id or "unknown",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            duration_ms=model_latency_ms,
+                            finish_reason="error",
+                            turn_number=iterations,
+                            correlation_id=effective_cid,
+                            retry_count=retries_attempted,
+                            failure_category=cat.value,
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to record model error telemetry: %s", str(exc))
                 return AgentExecutionResult(
                     task_id=request.task_id,
                     status=TaskStatus.FAILED,
@@ -494,10 +639,30 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=err.message,
+                    correlation_id=effective_cid,
                     termination_reason="model_error",
                 )
             except Exception as exc:
                 logger.error("Unexpected exception invoking model on turn %d: %s", iterations, str(exc), exc_info=True)
+                model_latency_ms = (time.perf_counter() - model_call_start) * 1000.0
+                cat = classify_error(exc)
+                if self.model_call_repo:
+                    try:
+                        self.model_call_repo.record_call(
+                            task_id=request.task_id,
+                            model_name=last_model_id or "unknown",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            total_tokens=0,
+                            duration_ms=model_latency_ms,
+                            finish_reason="error",
+                            turn_number=iterations,
+                            correlation_id=effective_cid,
+                            retry_count=retries_attempted,
+                            failure_category=cat.value,
+                        )
+                    except Exception as repo_exc:
+                        logger.debug("Failed to record model exception telemetry: %s", str(repo_exc))
                 return AgentExecutionResult(
                     task_id=request.task_id,
                     status=TaskStatus.FAILED,
@@ -508,6 +673,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=f"Internal model execution error: {str(exc)}",
+                    correlation_id=effective_cid,
                     termination_reason="internal_error",
                 )
 
@@ -518,6 +684,8 @@ class AgentLoop:
                         ModelCallRecord(
                             id=str(uuid.uuid4()),
                             task_id=request.task_id,
+                            request_id=getattr(model_response, "request_id", None),
+                            correlation_id=effective_cid,
                             iteration=iterations,
                             model=model_response.model or "unknown",
                             prompt_tokens=model_response.usage.get("prompt_tokens", 0) if model_response.usage else 0,
@@ -525,6 +693,7 @@ class AgentLoop:
                             total_tokens=model_response.usage.get("total_tokens", 0) if model_response.usage else 0,
                             finish_reason=model_response.finish_reason,
                             latency_ms=model_latency_ms,
+                            retry_count=retries_attempted,
                         )
                     )
                 except Exception as exc:
@@ -565,6 +734,7 @@ class AgentLoop:
                         model=last_model_id,
                         usage=accumulated_usage,
                         error="Model returned empty completion without tool calls.",
+                        correlation_id=effective_cid,
                         termination_reason="empty_response",
                     )
 
@@ -585,6 +755,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=None,
+                    correlation_id=effective_cid,
                     termination_reason="completed",
                 )
 
@@ -611,6 +782,7 @@ class AgentLoop:
                     model=last_model_id,
                     usage=accumulated_usage,
                     error=f"Task exceeded maximum tool calls budget of {request.max_tool_calls}.",
+                    correlation_id=effective_cid,
                     termination_reason="max_tool_calls",
                 )
 
@@ -665,7 +837,31 @@ class AgentLoop:
                         model=last_model_id,
                         usage=accumulated_usage,
                         error="Task was cancelled by user.",
+                        correlation_id=effective_cid,
                         termination_reason="cancelled",
+                    )
+
+                # Check deterministic loop detector
+                loop_diagnostic = effective_loop_detector.record_call(tool_name=tc.name, arguments=tc.raw_arguments)
+                if loop_diagnostic:
+                    logger.warning("Terminating task %s due to loop detection: %s", request.task_id, loop_diagnostic)
+                    self._emit_event(
+                        request,
+                        RuntimeEventType.TOOL_LOOP_DETECTED,
+                        {"tool_name": tc.name, "diagnostic": loop_diagnostic},
+                    )
+                    return AgentExecutionResult(
+                        task_id=request.task_id,
+                        status=TaskStatus.FAILED,
+                        final_response=None,
+                        iterations=iterations,
+                        tool_calls_count=total_tool_calls,
+                        history=history,
+                        model=last_model_id,
+                        usage=accumulated_usage,
+                        error=loop_diagnostic,
+                        correlation_id=effective_cid,
+                        termination_reason="loop_detected",
                     )
 
                 self._emit_event(
@@ -691,6 +887,7 @@ class AgentLoop:
                             arguments=tc.raw_arguments,
                             is_mutation=is_mutation,
                             idempotent=idempotent,
+                            correlation_id=effective_cid,
                         )
                     except Exception as exc:
                         logger.debug("Failed to record tool start in repository for task %s: %s", request.task_id, str(exc))

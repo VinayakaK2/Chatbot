@@ -488,11 +488,10 @@ def test_migration_upgrade_v1_to_v2_preserves_data(tmp_path: Path) -> None:
             "VALUES ('t-legacy', 's-legacy', 'Legacy Task Prompt', 'completed', '2026-01-01T00:00:00Z', 1);"
         )
 
-    # 3. Run migration runner to apply remaining migrations (v2)
+    # 3. Run migration runner to apply remaining migrations (v2 and beyond)
     runner = MigrationRunner(manager)
     applied = runner.run_migrations()
-    assert len(applied) == 1
-    assert applied[0] == 2
+    assert 2 in applied
 
     # 4. Verify existing records are preserved and new column is accessible
     with manager.connection() as conn:
@@ -725,10 +724,10 @@ def test_migration_compatibility_clean_v1_database(tmp_path: Path) -> None:
             (datetime.now(timezone.utc).isoformat(),),
         )
 
-    # Run migration runner to apply v2
+    # Run migration runner to apply remaining migrations
     runner = MigrationRunner(manager)
     applied = runner.run_migrations()
-    assert applied == [2]
+    assert 2 in applied
 
     # Verify column, index, and data
     with manager.connection() as conn:
@@ -795,10 +794,10 @@ def test_migration_compatibility_valid_continuation_records(tmp_path: Path) -> N
         conn.execute("INSERT INTO tasks (id, prompt, status, created_at) VALUES ('p-2', 'Parent 2', 'failed', ?);", (now_iso,))
         conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('c-2', 'p-2', 'Continuation 2', 'pending', ?);", (now_iso,))
 
-    # Apply migration 002
+    # Apply remaining migrations
     runner = MigrationRunner(manager)
     applied = runner.run_migrations()
-    assert applied == [2]
+    assert 2 in applied
 
     # Verify relationships are 100% preserved
     with manager.connection() as conn:
@@ -852,10 +851,10 @@ def test_migration_compatibility_duplicate_continuation_records_no_silent_deleti
         conn.execute("INSERT INTO transcript_messages (id, task_id, sequence_num, role, content, created_at) VALUES ('msg-2', 'child-dup-2', 1, 'user', 'Turn 2', ?);", (t2,))
         conn.execute("INSERT INTO transcript_messages (id, task_id, sequence_num, role, content, created_at) VALUES ('msg-3', 'child-dup-3', 1, 'user', 'Turn 3', ?);", (t3,))
 
-    # Apply migration 002: MUST NOT fail on duplicate index creation and MUST NOT silently delete records
+    # Apply remaining migrations: MUST NOT fail on duplicate index creation and MUST NOT silently delete records
     runner = MigrationRunner(manager)
     applied = runner.run_migrations()
-    assert applied == [2]
+    assert 2 in applied
 
     # Verify ZERO records were deleted: all 4 tasks still exist!
     with manager.connection() as conn:

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
@@ -20,6 +20,8 @@ class RuntimeEventType(str, Enum):
     TOOL_EXECUTION_STARTED = "tool_execution_started"
     TOOL_COMPLETED = "tool_completed"
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
+    MODEL_RETRY_SCHEDULED = "model_retry_scheduled"
+    TOOL_LOOP_DETECTED = "tool_loop_detected"
     VERIFICATION_COMPLETED = "verification_completed"
     TASK_CANCELLED = "task_cancelled"
     TASK_LIMIT_REACHED = "task_limit_reached"
@@ -31,6 +33,7 @@ class RuntimeEvent(BaseModel):
 
     event_id: str = Field(..., description="Unique event identifier (UUID)")
     task_id: str = Field(..., description="Task to which this event belongs")
+    correlation_id: Optional[str] = Field(default=None, description="Trace correlation ID")
     event_type: RuntimeEventType = Field(..., description="Categorical type of the event")
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),

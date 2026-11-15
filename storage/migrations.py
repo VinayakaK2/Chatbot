@@ -176,6 +176,60 @@ MIGRATIONS: List[Tuple[int, str, str]] = [
         END;
         """,
     ),
+    (
+        3,
+        "003_reliability_observability_verification",
+        """
+        -- Add correlation and verification columns to tasks
+        ALTER TABLE tasks ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'not_run';
+        ALTER TABLE tasks ADD COLUMN correlation_id TEXT DEFAULT NULL;
+
+        -- Add correlation and retry tracking to tool_executions
+        ALTER TABLE tool_executions ADD COLUMN correlation_id TEXT DEFAULT NULL;
+        ALTER TABLE tool_executions ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+
+        -- Add request tracking, correlation, retries, and failure category to model_calls
+        ALTER TABLE model_calls ADD COLUMN request_id TEXT DEFAULT NULL;
+        ALTER TABLE model_calls ADD COLUMN correlation_id TEXT DEFAULT NULL;
+        ALTER TABLE model_calls ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE model_calls ADD COLUMN failure_category TEXT DEFAULT NULL;
+
+        -- Trusted verification records
+        CREATE TABLE IF NOT EXISTS verification_records (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            verification_type TEXT NOT NULL CHECK(verification_type IN ('test', 'build', 'lint', 'typecheck', 'custom')),
+            command TEXT NOT NULL,
+            exit_code INTEGER DEFAULT NULL,
+            result TEXT NOT NULL CHECK(result IN ('not_run', 'passed', 'failed', 'inconclusive', 'blocked')),
+            output_excerpt TEXT DEFAULT NULL,
+            duration_ms REAL DEFAULT NULL,
+            correlation_id TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_verification_task ON verification_records(task_id);
+        CREATE INDEX IF NOT EXISTS idx_verification_result ON verification_records(result);
+        CREATE INDEX IF NOT EXISTS idx_verification_correlation ON verification_records(correlation_id);
+
+        -- Structured runtime lifecycle events
+        CREATE TABLE IF NOT EXISTS runtime_events (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+            session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+            correlation_id TEXT DEFAULT NULL,
+            parent_event_id TEXT REFERENCES runtime_events(id) ON DELETE SET NULL,
+            payload_json TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_events_task ON runtime_events(task_id);
+        CREATE INDEX IF NOT EXISTS idx_events_session ON runtime_events(session_id);
+        CREATE INDEX IF NOT EXISTS idx_events_correlation ON runtime_events(correlation_id);
+        CREATE INDEX IF NOT EXISTS idx_events_type ON runtime_events(event_type);
+        """,
+    ),
 ]
 
 
@@ -239,6 +293,8 @@ class MigrationRunner:
             cursor = conn.cursor()
             if version == 2:
                 cls._apply_migration_002(conn)
+            elif version == 3:
+                cls._apply_migration_003(conn)
             else:
                 cursor.executescript(ddl)
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -246,8 +302,10 @@ class MigrationRunner:
                 "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?);",
                 (version, description, now_iso),
             )
+            conn.commit()
             new_count += 1
 
+        conn.commit()
         return new_count
 
     @classmethod
@@ -376,3 +434,86 @@ class MigrationRunner:
             END;
             """
         )
+
+    @classmethod
+    def _apply_migration_003(cls, conn: sqlite3.Connection) -> None:
+        """Apply migration 003: Reliability, Observability, and Verification schema.
+
+        Handles:
+        1. Adding verification_status and correlation_id to tasks if not present.
+        2. Adding correlation_id and retry_count to tool_executions if not present.
+        3. Adding request_id, correlation_id, retry_count, failure_category to model_calls if not present.
+        4. Creating verification_records table and performance indexes.
+        5. Creating runtime_events table and performance indexes.
+        """
+        cursor = conn.cursor()
+
+        # 1. Alter tasks table safely
+        cursor.execute("PRAGMA table_info(tasks);")
+        task_cols = [row[1] for row in cursor.fetchall()]
+        if "verification_status" not in task_cols:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'not_run';")
+        if "correlation_id" not in task_cols:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN correlation_id TEXT DEFAULT NULL;")
+
+        # 2. Alter tool_executions table safely
+        cursor.execute("PRAGMA table_info(tool_executions);")
+        tool_cols = [row[1] for row in cursor.fetchall()]
+        if "correlation_id" not in tool_cols:
+            cursor.execute("ALTER TABLE tool_executions ADD COLUMN correlation_id TEXT DEFAULT NULL;")
+        if "retry_count" not in tool_cols:
+            cursor.execute("ALTER TABLE tool_executions ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;")
+
+        # 3. Alter model_calls table safely
+        cursor.execute("PRAGMA table_info(model_calls);")
+        model_cols = [row[1] for row in cursor.fetchall()]
+        if "request_id" not in model_cols:
+            cursor.execute("ALTER TABLE model_calls ADD COLUMN request_id TEXT DEFAULT NULL;")
+        if "correlation_id" not in model_cols:
+            cursor.execute("ALTER TABLE model_calls ADD COLUMN correlation_id TEXT DEFAULT NULL;")
+        if "retry_count" not in model_cols:
+            cursor.execute("ALTER TABLE model_calls ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;")
+        if "failure_category" not in model_cols:
+            cursor.execute("ALTER TABLE model_calls ADD COLUMN failure_category TEXT DEFAULT NULL;")
+
+        # 4. Create verification_records table and indexes
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS verification_records (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                verification_type TEXT NOT NULL CHECK(verification_type IN ('test', 'build', 'lint', 'typecheck', 'custom')),
+                command TEXT NOT NULL,
+                exit_code INTEGER DEFAULT NULL,
+                result TEXT NOT NULL CHECK(result IN ('not_run', 'passed', 'failed', 'inconclusive', 'blocked')),
+                output_excerpt TEXT DEFAULT NULL,
+                duration_ms REAL DEFAULT NULL,
+                correlation_id TEXT DEFAULT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_task ON verification_records(task_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_result ON verification_records(result);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_correlation ON verification_records(correlation_id);")
+
+        # 5. Create runtime_events table and indexes
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+                session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+                correlation_id TEXT DEFAULT NULL,
+                parent_event_id TEXT REFERENCES runtime_events(id) ON DELETE SET NULL,
+                payload_json TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_task ON runtime_events(task_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON runtime_events(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_correlation ON runtime_events(correlation_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON runtime_events(event_type);")
+

@@ -869,14 +869,44 @@ Make failures understandable, bounded, and recoverable, and ensure completion cl
 9. Redact secrets and cap logs.
 10. Provide a diagnostic command that reports configuration presence and endpoint reachability without printing secret values.
 
+## Implementation & Audit Status (2026-11-15)
+
+- **Status:** Complete & Verified — Awaiting Operator Command to Formally Freeze.
+- **Implemented Components:**
+  - `core/observability.py`: Ambient correlation ID contextvars, structured dot-delimited lifecycle events (`EventType`), payload middle truncation (64KB cap), thread-safe `StructuredEventEmitter`.
+  - `core/retry.py`: `FailureCategory` taxonomy, transient vs permanent classification, jittered exponential backoff, `Retry-After` header extraction, fail-closed non-idempotent mutation protection.
+  - `core/loop_detector.py`: Canonical sorted-key SHA-256 argument hashing, sliding history window, consecutive identical failure detection (threshold=3), oscillating ping-pong pattern detection (`A -> B -> A -> B`, threshold=2).
+  - `core/verification.py`: `VerificationRunner` subprocess execution with cross-platform tree kill (`taskkill /F /T` on Windows, process group on POSIX), exit code capture, 64KB bounded output middle truncation, SQLite persistence.
+  - `core/diagnostics.py`: `mask_secret` safe credential display (`sk-***...***5de (len=34)`), shallow model connectivity probe, SQLite database health check (PRAGMA integrity_check, WAL mode, migration versions), CLI entry point `chatbot-diagnostics`.
+  - `storage/migrations.py`: Migration 003 (`003_reliability_observability_verification`) creating `verification_records` and `runtime_events` tables with performance indexes and adding correlation/retry columns to `tasks`, `tool_executions`, and `model_calls`.
+  - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify`, `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
+- **Verification Evidence:**
+  - 32 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+  - 554/555 backend tests passed (1 skipped live GPU endpoint test) with zero regressions across Phases 0–7.
+  - 59/59 frontend vitest tests passed across 10 test files.
+  - Frontend production build (`tsc -b && vite build`) passed cleanly in 518ms.
+- **Dossier & Documentation:**
+  - `docs/reports/phase-8/phase-8-design.md`: Architecture design, sequence diagrams, and schema contracts.
+  - `docs/reports/phase-8/phase-8-implementation-report.md`: Technical breakdown of work items, components, migrations, and APIs.
+  - `docs/reports/phase-8/phase-8-adversarial-report.md`: Adversarial testing against 10 threat scenarios.
+  - `docs/reports/phase-8/phase-8-independent-audit.md`: Formal forensic audit report against `AGENTS.md` and `2604.14228v3.pdf`.
+  - `docs/reports/phase-8/phase-8-final-report.md`: Executive acceptance summary and freeze readiness.
+- **Integrity Boundary:** Phase 8 implementation is complete and verified. Awaiting explicit operator instruction before formal freeze. Phase 9 has not been started.
+
 ## Candidate files
 
 - `core/observability.py`
 - `core/retry.py`
 - `core/verification.py`
+- `core/loop_detector.py`
+- `core/diagnostics.py`
+- `api/routes/verification.py`
 - `tests/test_retries.py`
-- `tests/test_cancellation.py`
+- `tests/test_loop_detector.py`
 - `tests/test_verification.py`
+- `tests/test_observability.py`
+- `tests/test_cancellation_shutdown.py`
+- `tests/test_diagnostics.py`
 
 ## Tests and acceptance criteria
 

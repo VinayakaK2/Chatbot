@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 coding-agent = "main:main"
+chatbot-diagnostics = "core.diagnostics:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -65,6 +65,26 @@ class ExecutionState(str, Enum):
     INTERRUPTED = "interrupted"
 
 
+class VerificationStatus(str, Enum):
+    """Authoritative outcome status of a verification run (decoupled from task execution status)."""
+
+    NOT_RUN = "not_run"
+    PASSED = "passed"
+    FAILED = "failed"
+    INCONCLUSIVE = "inconclusive"
+    BLOCKED = "blocked"
+
+
+class VerificationType(str, Enum):
+    """Categorization of automated verification check."""
+
+    TEST = "test"
+    BUILD = "build"
+    LINT = "lint"
+    TYPECHECK = "typecheck"
+    CUSTOM = "custom"
+
+
 class SessionRecord(BaseModel):
     """Durable record representing an agent session."""
 
@@ -104,6 +124,8 @@ class TaskRecord(BaseModel):
     model: Optional[str] = Field(default=None)
     usage_json: Optional[str] = Field(default=None)
     error: Optional[str] = Field(default=None)
+    verification_status: VerificationStatus = Field(default=VerificationStatus.NOT_RUN, description="Authoritative independent verification result")
+    correlation_id: Optional[str] = Field(default=None, description="Root or current trace correlation ID")
     iterations: int = Field(default=0)
     tool_calls_count: int = Field(default=0)
     termination_reason: Optional[str] = Field(default=None)
@@ -169,6 +191,8 @@ class ToolExecutionRecord(BaseModel):
     error: Optional[str] = Field(default=None)
     error_category: Optional[str] = Field(default=None)
     duration_ms: Optional[float] = Field(default=None)
+    correlation_id: Optional[str] = Field(default=None, description="Trace correlation ID")
+    retry_count: int = Field(default=0, description="Attempt sequence number for transient retries")
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     started_at: Optional[str] = Field(default=None)
     completed_at: Optional[str] = Field(default=None)
@@ -186,6 +210,8 @@ class ModelCallRecord(BaseModel):
 
     id: str = Field(..., description="Unique model call UUID")
     task_id: str = Field(..., description="Associated task UUID")
+    request_id: Optional[str] = Field(default=None, description="Upstream provider request ID")
+    correlation_id: Optional[str] = Field(default=None, description="Trace correlation ID")
     iteration: int = Field(...)
     model: str = Field(...)
     prompt_tokens: int = Field(default=0)
@@ -193,6 +219,8 @@ class ModelCallRecord(BaseModel):
     total_tokens: int = Field(default=0)
     finish_reason: Optional[str] = Field(default=None)
     latency_ms: Optional[float] = Field(default=None)
+    retry_count: int = Field(default=0, description="Attempt sequence number for transient retries")
+    failure_category: Optional[str] = Field(default=None, description="Classified error category if failed")
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
@@ -250,3 +278,45 @@ class RecoverySummary(BaseModel):
     stale_approvals_invalidated: int = Field(default=0)
     continuation_task_ids: List[str] = Field(default_factory=list)
     details: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class VerificationRecord(BaseModel):
+    """Authoritative durable record of an automated verification command execution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(..., description="Unique verification record UUID")
+    task_id: str = Field(..., description="Associated task UUID")
+    verification_type: VerificationType = Field(..., description="Categorization of verification check")
+    command: str = Field(..., description="Executed command line string")
+    exit_code: Optional[int] = Field(default=None, description="Process termination exit code")
+    result: VerificationStatus = Field(default=VerificationStatus.NOT_RUN, description="Classified outcome")
+    output_excerpt: Optional[str] = Field(default=None, description="Sanitized and bounded stdout/stderr capture")
+    duration_ms: Optional[float] = Field(default=None, description="Execution duration in milliseconds")
+    correlation_id: Optional[str] = Field(default=None, description="Associated trace correlation ID")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class PersistedEventRecord(BaseModel):
+    """Structured runtime lifecycle event persisted for audit and observability."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(..., description="Unique runtime event UUID")
+    event_type: str = Field(..., description="Dot-delimited lifecycle event name")
+    task_id: Optional[str] = Field(default=None, description="Associated task UUID if applicable")
+    session_id: Optional[str] = Field(default=None, description="Associated session UUID if applicable")
+    correlation_id: Optional[str] = Field(default=None, description="Trace correlation ID")
+    parent_event_id: Optional[str] = Field(default=None, description="Parent event UUID for nested causal chains")
+    payload_json: Optional[str] = Field(default=None, description="JSON-serialized event payload")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def payload(self) -> Dict[str, Any]:
+        """Parsed dictionary view of payload_json."""
+        import json
+        try:
+            return json.loads(self.payload_json) if self.payload_json else {}
+        except Exception:
+            return {}
+

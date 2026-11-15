@@ -6,6 +6,7 @@ from storage.models import (
     ApprovalRecord,
     ExecutionState,
     ModelCallRecord,
+    PersistedEventRecord,
     RecoveryClassification,
     RecoveryStatus,
     RecoverySummary,
@@ -15,11 +16,15 @@ from storage.models import (
     TaskRecord,
     ToolExecutionRecord,
     TranscriptMessageRecord,
+    VerificationRecord,
+    VerificationStatus,
+    VerificationType,
 )
 from storage.repositories import (
     ApprovalRepository,
     InvalidStateTransitionError,
     ModelCallRepository,
+    RuntimeEventRepository,
     SessionNotFoundError,
     SessionRepository,
     StorageError,
@@ -27,6 +32,7 @@ from storage.repositories import (
     TaskRepository,
     ToolExecutionRepository,
     TranscriptRepository,
+    VerificationRepository,
 )
 
 __all__ = [
@@ -36,6 +42,8 @@ __all__ = [
     "RecoveryStatus",
     "RecoveryClassification",
     "ExecutionState",
+    "VerificationStatus",
+    "VerificationType",
     "SessionRecord",
     "TaskRecord",
     "StateTransitionRecord",
@@ -44,6 +52,8 @@ __all__ = [
     "ModelCallRecord",
     "ApprovalRecord",
     "RecoverySummary",
+    "VerificationRecord",
+    "PersistedEventRecord",
     "StorageError",
     "InvalidStateTransitionError",
     "TaskNotFoundError",
@@ -54,4 +64,6 @@ __all__ = [
     "ToolExecutionRepository",
     "ModelCallRepository",
     "ApprovalRepository",
+    "VerificationRepository",
+    "RuntimeEventRepository",
 ]

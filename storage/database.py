@@ -73,6 +73,7 @@ class DatabaseManager:
             timeout=self.busy_timeout_ms / 1000.0,
             check_same_thread=False,
             uri=is_uri,
+            isolation_level=None,
         )
         conn.row_factory = sqlite3.Row
         self._apply_pragmas(conn)
@@ -104,11 +105,14 @@ class DatabaseManager:
         conn = self.get_connection()
         # Acquire lock to ensure serialized transaction execution if shared connection
         with self._lock:
+            if not conn.in_transaction:
+                conn.execute("BEGIN;")
             try:
                 yield conn
                 conn.commit()
             except Exception as exc:
-                conn.rollback()
+                if conn.in_transaction:
+                    conn.rollback()
                 logger.debug("Rolled back transaction due to error: %s", type(exc).__name__)
                 raise
 

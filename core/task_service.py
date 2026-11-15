@@ -22,6 +22,8 @@ from core.tool_registry import ToolRegistry, get_global_registry
 from core.workspace import WorkspaceContext
 from model.contracts import ModelError, ModelProvider
 from model.vllm_adapter import VLLMAdapter
+from core.observability import EventType, StructuredEventEmitter, get_correlation_id
+from core.verification import VerificationRunner
 from storage.database import DatabaseManager
 from storage.migrations import MigrationRunner
 from storage.models import (
@@ -30,15 +32,20 @@ from storage.models import (
     SessionRecord,
     SessionStatus,
     TaskRecord,
+    VerificationRecord,
+    VerificationStatus,
+    VerificationType,
 )
 from storage.repositories import (
     ApprovalRepository,
     InvalidStateTransitionError,
     ModelCallRepository,
+    RuntimeEventRepository,
     SessionRepository,
     TaskRepository,
     ToolExecutionRepository,
     TranscriptRepository,
+    VerificationRepository,
 )
 from tools.registry_setup import register_shell_tools, register_workspace_tools
 from tools.security import redact_secrets
@@ -133,6 +140,15 @@ class TaskService:
         self.model_call_repo = ModelCallRepository(self.database_manager)
         self.approval_repo = ApprovalRepository(self.database_manager)
         self.approval_manager.approval_repo = self.approval_repo
+        self.verification_repo = VerificationRepository(self.database_manager, extra_secrets=extra_sec)
+        self.event_repo = RuntimeEventRepository(self.database_manager, extra_secrets=extra_sec)
+        self.event_emitter = StructuredEventEmitter(event_repo=self.event_repo, extra_secrets=extra_sec)
+        self.verification_runner = VerificationRunner(
+            verification_repo=self.verification_repo,
+            event_emitter=self.event_emitter,
+            default_timeout_seconds=self.settings.agent_tool_timeout_seconds,
+            extra_secrets=extra_sec,
+        )
         self.session_manager = session_manager or SessionManager(self.database_manager)
         self.recovery_engine = StartupRecoveryEngine(self.database_manager, tool_registry=self.tool_registry)
 
@@ -260,12 +276,16 @@ class TaskService:
 
                 self._tasks[task_id] = target_task
                 try:
+                    v_stat = VerificationStatus(target_task.verification_status) if getattr(target_task, "verification_status", None) else VerificationStatus.NOT_RUN
                     task_rec = TaskRecord(
                         id=task_id,
                         session_id=target_task.session_id,
+                        parent_task_id=target_task.parent_task_id,
                         prompt=target_task.prompt,
                         status=target_task.status,
                         recovery_status=RecoveryStatus(target_task.recovery_status) if target_task.recovery_status else None,
+                        verification_status=v_stat,
+                        correlation_id=getattr(target_task, "correlation_id", None),
                         response_text=target_task.response_text,
                         finish_reason=target_task.finish_reason,
                         model=target_task.model,
@@ -528,6 +548,7 @@ class TaskService:
         """Submit a prompt and process execution via the agent execution loop."""
         task_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
+        correlation_id = getattr(request, "correlation_id", None) or get_correlation_id()
 
         # Attach session if provided or ensure default workspace session
         session_id = getattr(request, "session_id", None)
@@ -545,8 +566,20 @@ class TaskService:
         self._record_event(
             task_id=task_id,
             event_type=RuntimeEventType.TASK_CREATED,
-            payload={"prompt": request.prompt, "max_tokens": request.max_tokens},
+            payload={
+                "prompt": request.prompt,
+                "max_tokens": request.max_tokens,
+                "correlation_id": correlation_id,
+            },
         )
+        if self.event_emitter:
+            self.event_emitter.emit(
+                EventType.TASK_SUBMITTED,
+                task_id=task_id,
+                session_id=session_id,
+                correlation_id=correlation_id,
+                payload={"prompt": request.prompt},
+            )
 
         # Handle unconfigured model provider state safely
         if self.model_provider is None or self.agent_loop is None:
@@ -556,6 +589,7 @@ class TaskService:
                 session_id=session_id,
                 prompt=request.prompt,
                 status=TaskStatus.FAILED,
+                correlation_id=correlation_id,
                 error=err_msg,
                 termination_reason="unconfigured_model",
                 created_at=created_at,
@@ -568,7 +602,7 @@ class TaskService:
             )
             return stored_task
 
-        return await self._execute_with_loop(task_id, request, created_at, session_id=session_id)
+        return await self._execute_with_loop(task_id, request, created_at, session_id=session_id, correlation_id=correlation_id)
 
     async def resume_task(self, task_id: str) -> TaskResponse:
         """Resume an interrupted task by creating and dispatching a linked continuation task.
@@ -644,13 +678,16 @@ class TaskService:
         request: TaskCreateRequest,
         created_at: str,
         session_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
     ) -> TaskResponse:
         """Execute task through the AgentLoop engine with cancellation and streaming."""
+        eff_cid = correlation_id or get_correlation_id()
         executing_record = TaskResponse(
             task_id=task_id,
             session_id=session_id,
             prompt=request.prompt,
             status=TaskStatus.EXECUTING,
+            correlation_id=eff_cid,
             created_at=created_at,
         )
 
@@ -685,19 +722,35 @@ class TaskService:
             temperature=request.temperature if request.temperature is not None else 0.2,
             task_timeout_seconds=self.settings.agent_task_timeout_seconds,
             tool_timeout_seconds=self.settings.agent_tool_timeout_seconds,
+            model_timeout_seconds=self.settings.agent_model_timeout_seconds,
+            max_model_retries=self.settings.agent_model_max_retries,
+            correlation_id=eff_cid,
             cancellation_token=cancellation_token,
             event_sink=lambda ev: self._broadcast_event(ev),
+            event_emitter=self.event_emitter,
         )
 
         try:
             loop_result = await self.agent_loop.run(exec_request)
             completed_at = datetime.now(timezone.utc).isoformat()
+            v_status = self.verification_runner.get_latest_status(task_id).value
+
+            # Calculate precise wall-clock duration in seconds
+            duration_sec: Optional[float] = None
+            try:
+                t0 = datetime.fromisoformat(created_at)
+                t1 = datetime.fromisoformat(completed_at)
+                duration_sec = max(0.01, round((t1 - t0).total_seconds(), 2))
+            except Exception:
+                duration_sec = None
 
             final_task = TaskResponse(
                 task_id=task_id,
                 session_id=session_id,
                 prompt=request.prompt,
                 status=loop_result.status,
+                verification_status=v_status,
+                correlation_id=eff_cid,
                 response_text=loop_result.final_response,
                 finish_reason=loop_result.finish_reason or loop_result.termination_reason,
                 model=loop_result.model,
@@ -708,6 +761,7 @@ class TaskService:
                 termination_reason=loop_result.termination_reason,
                 created_at=created_at,
                 completed_at=completed_at,
+                duration_seconds=duration_sec,
             )
 
             terminal_payload = {
@@ -718,6 +772,7 @@ class TaskService:
                 "tool_calls_count": loop_result.tool_calls_count,
                 "termination_reason": loop_result.termination_reason,
                 "error": loop_result.error,
+                "duration_seconds": duration_sec,
             }
 
             _, stored_task = self._transition_task_state(
@@ -730,20 +785,31 @@ class TaskService:
         except Exception as exc:
             logger.error("Unexpected execution error for task %s: %s", task_id, type(exc).__name__, exc_info=True)
             err_msg = "An unexpected internal error occurred during agent execution."
+            fail_completed_at = datetime.now(timezone.utc).isoformat()
+            fail_duration_sec: Optional[float] = None
+            try:
+                t0 = datetime.fromisoformat(created_at)
+                t1 = datetime.fromisoformat(fail_completed_at)
+                fail_duration_sec = max(0.01, round((t1 - t0).total_seconds(), 2))
+            except Exception:
+                fail_duration_sec = None
+
             failed_task = TaskResponse(
                 task_id=task_id,
                 session_id=session_id,
                 prompt=request.prompt,
                 status=TaskStatus.FAILED,
+                correlation_id=eff_cid,
                 error=err_msg,
                 termination_reason="unexpected_crash",
                 created_at=created_at,
-                completed_at=datetime.now(timezone.utc).isoformat(),
+                completed_at=fail_completed_at,
+                duration_seconds=fail_duration_sec,
             )
             _, stored_task = self._transition_task_state(
                 task_id=task_id,
                 target_task=failed_task,
-                terminal_event_payload={"status": TaskStatus.FAILED.value, "error": err_msg},
+                terminal_event_payload={"status": TaskStatus.FAILED.value, "error": err_msg, "duration_seconds": fail_duration_sec},
             )
             return stored_task
 
@@ -763,15 +829,29 @@ class TaskService:
                 task = self._tasks.get(task_id)
 
         if task is not None:
-            return task
+            latest_v = self.verification_runner.get_latest_status(task_id).value
+            return task.model_copy(update={"verification_status": latest_v})
 
         # Check durable SQLite storage if not present in memory (e.g. after restart)
         try:
             db_task = self.task_repo.get(task_id)
             if db_task:
+                v_stat = db_task.verification_status.value if hasattr(db_task, "verification_status") and db_task.verification_status else "not_run"
+                duration_sec: Optional[float] = None
+                if db_task.created_at and db_task.completed_at:
+                    try:
+                        t0 = datetime.fromisoformat(db_task.created_at)
+                        t1 = datetime.fromisoformat(db_task.completed_at)
+                        duration_sec = max(0.01, round((t1 - t0).total_seconds(), 2))
+                    except Exception:
+                        duration_sec = None
+
                 task_resp = TaskResponse(
                     task_id=db_task.id,
                     session_id=db_task.session_id,
+                    parent_task_id=db_task.parent_task_id,
+                    correlation_id=getattr(db_task, "correlation_id", None),
+                    verification_status=v_stat,
                     prompt=db_task.prompt,
                     status=db_task.status,
                     recovery_status=db_task.recovery_status.value if db_task.recovery_status else None,
@@ -785,6 +865,7 @@ class TaskService:
                     termination_reason=db_task.termination_reason,
                     created_at=db_task.created_at,
                     completed_at=db_task.completed_at,
+                    duration_seconds=duration_sec,
                 )
                 with self._registry_lock:
                     self._tasks[task_id] = task_resp
@@ -794,8 +875,9 @@ class TaskService:
 
         return None
 
-    def cancel_task(self, task_id: str) -> Optional[TaskResponse]:
+    def cancel_task(self, task_id: str, reason: Optional[str] = None) -> Optional[TaskResponse]:
         """Cancel an in-progress or queued task safely by signaling its cancellation token."""
+        effective_reason = reason or "Task was cancelled by user."
         lock = self._get_task_lock(task_id, create=True)
         with lock:
             task = self._tasks.get(task_id)
@@ -828,10 +910,14 @@ class TaskService:
 
             cancelled_task = TaskResponse(
                 task_id=task_id,
+                session_id=task.session_id,
+                parent_task_id=task.parent_task_id,
+                correlation_id=task.correlation_id,
+                verification_status=task.verification_status,
                 prompt=task.prompt,
                 status=TaskStatus.CANCELLED,
-                error="Task was cancelled by user.",
-                termination_reason="cancelled",
+                error=effective_reason,
+                termination_reason=effective_reason,
                 created_at=task.created_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
@@ -841,15 +927,34 @@ class TaskService:
                 target_task=cancelled_task,
                 terminal_event_payload={
                     "status": TaskStatus.CANCELLED.value,
-                    "error": "Task was cancelled by user.",
-                    "termination_reason": "cancelled",
+                    "error": effective_reason,
+                    "termination_reason": effective_reason,
                 },
                 intermediate_event=(
                     RuntimeEventType.TASK_CANCELLED,
-                    {"status": "cancelled", "error": "Task was cancelled by user."},
+                    {"status": "cancelled", "error": effective_reason},
                 ),
             )
             return stored_task
+
+    def graceful_shutdown(self, timeout_seconds: float = 5.0) -> None:
+        """Gracefully cancel all active in-flight tasks and flush state."""
+        logger.info("Initiating graceful shutdown of TaskService...")
+        with self._registry_lock:
+            active_ids = [
+                tid for tid, task in self._tasks.items()
+                if task.status not in TERMINAL_STATUSES
+            ]
+
+        for tid in active_ids:
+            try:
+                self.cancel_task(tid)
+            except Exception as e:
+                logger.debug("Error cancelling task %s during shutdown: %s", tid, str(e))
+
+        logger.info("Graceful shutdown complete: cancelled %d active tasks.", len(active_ids))
+
+    shutdown = graceful_shutdown
 
     def get_events(self, task_id: str) -> List[RuntimeEvent]:
         """Retrieve all recorded events for a task."""

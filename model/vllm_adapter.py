@@ -243,6 +243,9 @@ class VLLMAdapter(ModelProvider):
 
         message = first_choice.get("message", {})
         content = message.get("content") or ""
+        reasoning_content = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning_content and not content.startswith("<think>"):
+            content = f"<think>\n{str(reasoning_content).strip()}\n</think>\n\n{content}"
         finish_reason = first_choice.get("finish_reason")
         tool_calls = message.get("tool_calls")
 

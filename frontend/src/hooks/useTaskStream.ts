@@ -148,11 +148,13 @@ export function useTaskStream(
 
           case 'task_terminal': {
             const isCompleted = payload.status === 'completed'
+            const termDuration = typeof payload.duration_seconds === 'number' ? payload.duration_seconds : undefined
             return {
               ...msg,
               status: isCompleted ? 'completed' : 'failed',
               error: payload.error as string | undefined,
               usage: (payload.usage as any) || msg.usage,
+              duration_seconds: termDuration ?? msg.duration_seconds,
             }
           }
 
