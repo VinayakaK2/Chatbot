@@ -5,10 +5,13 @@ SessionRepository, TaskRepository, TranscriptRepository, ToolExecutionRepository
 ModelCallRepository, and ApprovalRepository.
 """
 
-import sqlite3
-import pytest
+from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from typing import Generator
+import uuid
+
+import pytest
 
 from api.schemas.tasks import TaskStatus
 from storage.database import DatabaseManager
@@ -624,4 +627,272 @@ def test_secret_scrubbing_across_all_tables(temp_db: DatabaseManager) -> None:
                 row_str = " ".join(str(v) for v in dict(row).values())
                 for secret in raw_secrets:
                     assert secret not in row_str, f"Raw secret leaked in table {tbl}: column data contains '{secret}'"
+
+
+def test_terminal_task_deletion_administrative_behavior(temp_db: DatabaseManager) -> None:
+    """Verify Item A: Terminal tasks cannot be updated (full-row update immutability),
+    while deletion is intentionally restricted to low-level administrative operations
+    and preserves non-cascading state_transitions audit history.
+    """
+    session_repo = SessionRepository(temp_db)
+    task_repo = TaskRepository(temp_db)
+    transcript_repo = TranscriptRepository(temp_db)
+    tool_repo = ToolExecutionRepository(temp_db)
+    approval_repo = ApprovalRepository(temp_db)
+
+    # 1. Create session and terminal task
+    session = session_repo.create_session(title="Admin Delete Test", workspace_path="/tmp")
+    task = task_repo.create_task(
+        prompt="Administrative deletion test task",
+        session_id=session.id,
+    )
+    task_repo.transition_state(task.id, TaskStatus.EXECUTING)
+    task_repo.transition_state(task.id, TaskStatus.COMPLETED, response_text="Finished work")
+
+    # 2. Add dependent records
+    transcript_repo.append(
+        TranscriptMessageRecord(
+            id=str(uuid.uuid4()),
+            session_id=session.id,
+            task_id=task.id,
+            sequence_num=1,
+            role="user",
+            content="Hello task",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    )
+    tool_rec = tool_repo.record_started(
+        task_id=task.id,
+        call_id="call-del-01",
+        tool_name="read_file",
+        arguments={"path": "foo.py"},
+    )
+    tool_repo.record_completed(call_id=tool_rec.call_id, result_output="done")
+
+    # 3. Verify database trigger blocks SQL UPDATE on terminal task (full-row immutability)
+    with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
+        with temp_db.transaction() as conn:
+            conn.execute("UPDATE tasks SET prompt = 'illegal edit' WHERE id = ?;", (task.id,))
+
+    # 4. Perform explicit administrative deletion
+    deleted = task_repo.delete(task.id)
+    assert deleted is True
+
+    # 5. Verify task row is removed from tasks table
+    assert task_repo.get(task.id) is None
+
+    # 6. Verify cascading foreign keys cleaned up dependent task records
+    with temp_db.connection() as conn:
+        transcripts_count = conn.execute("SELECT count(*) FROM transcript_messages WHERE task_id = ?;", (task.id,)).fetchone()[0]
+        assert transcripts_count == 0
+        tools_count = conn.execute("SELECT count(*) FROM tool_executions WHERE task_id = ?;", (task.id,)).fetchone()[0]
+        assert tools_count == 0
+
+        # 7. Verify audit history in state_transitions is NOT deleted (non-cascading linear audit trail)
+        transitions = conn.execute("SELECT count(*) FROM state_transitions WHERE entity_id = ?;", (task.id,)).fetchone()[0]
+        assert transitions >= 3, "State transition audit history must remain intact after administrative deletion"
+
+
+def test_migration_compatibility_clean_v1_database(tmp_path: Path) -> None:
+    """Verify Item B.1: Migration 002 applies cleanly to a clean v1 schema database."""
+    db_file = tmp_path / "clean_v1.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    # Apply only v1 initial schema manually
+    v1_version, v1_desc, v1_sql = MIGRATIONS[0]
+    with manager.transaction() as conn:
+        conn.executescript(v1_sql)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (1, ?, ?);",
+            (v1_desc, datetime.now(timezone.utc).isoformat()),
+        )
+        # Insert a task in v1 schema
+        conn.execute(
+            """
+            INSERT INTO tasks (id, prompt, status, created_at)
+            VALUES ('t-v1', 'Legacy v1 prompt', 'pending', ?);
+            """,
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+
+    # Run migration runner to apply v2
+    runner = MigrationRunner(manager)
+    applied = runner.run_migrations()
+    assert applied == [2]
+
+    # Verify column, index, and data
+    with manager.connection() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(tasks);").fetchall()]
+        assert "parent_task_id" in cols
+        indices = [r[1] for r in conn.execute("PRAGMA index_list(tasks);").fetchall()]
+        assert "uq_tasks_parent_task" in indices
+        task_row = conn.execute("SELECT id, prompt, parent_task_id FROM tasks WHERE id = 't-v1';").fetchone()
+        assert task_row[0] == "t-v1"
+        assert task_row[1] == "Legacy v1 prompt"
+        assert task_row[2] is None
+
+    manager.close()
+
+
+def test_migration_compatibility_v2_database_no_continuations(tmp_path: Path) -> None:
+    """Verify Item B.2: Migration runner is idempotent on a v2 database with no continuation tasks."""
+    db_file = tmp_path / "v2_no_continuations.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    runner = MigrationRunner(manager)
+    runner.run_migrations()
+
+    # Insert tasks without continuations
+    task_repo = TaskRepository(manager)
+    task_repo.create_task(prompt="Independent task 1")
+    task_repo.create_task(prompt="Independent task 2")
+
+    # Re-run migration runner: zero new migrations, no errors
+    newly_applied = runner.run_migrations()
+    assert newly_applied == []
+
+    manager.close()
+
+
+def test_migration_compatibility_valid_continuation_records(tmp_path: Path) -> None:
+    """Verify Item B.3: Migration 002 succeeds on a database containing valid continuation relationships."""
+    db_file = tmp_path / "valid_continuations.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    # Initialize at v1 with parent_task_id column already existing
+    v1_version, v1_desc, v1_sql = MIGRATIONS[0]
+    with manager.transaction() as conn:
+        conn.executescript(v1_sql)
+        conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("INSERT INTO schema_migrations VALUES (1, 'v1', ?);", (datetime.now(timezone.utc).isoformat(),))
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Parent 1 and its single continuation C1
+        conn.execute("INSERT INTO tasks (id, prompt, status, created_at) VALUES ('p-1', 'Parent 1', 'failed', ?);", (now_iso,))
+        conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('c-1', 'p-1', 'Continuation 1', 'pending', ?);", (now_iso,))
+        # Parent 2 and its single continuation C2
+        conn.execute("INSERT INTO tasks (id, prompt, status, created_at) VALUES ('p-2', 'Parent 2', 'failed', ?);", (now_iso,))
+        conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('c-2', 'p-2', 'Continuation 2', 'pending', ?);", (now_iso,))
+
+    # Apply migration 002
+    runner = MigrationRunner(manager)
+    applied = runner.run_migrations()
+    assert applied == [2]
+
+    # Verify relationships are 100% preserved
+    with manager.connection() as conn:
+        c1 = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'c-1';").fetchone()[0]
+        assert c1 == "p-1"
+        c2 = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'c-2';").fetchone()[0]
+        assert c2 == "p-2"
+
+    manager.close()
+
+
+def test_migration_compatibility_duplicate_continuation_records_no_silent_deletion(tmp_path: Path) -> None:
+    """Verify Item B.4: Migration 002 accounts for existing duplicate continuation records by re-linking them
+    into a valid linear lineage WITHOUT silently deleting ANY historical records.
+    """
+    db_file = tmp_path / "duplicate_continuations.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    # Initialize at v1 with parent_task_id column already existing, containing duplicates
+    v1_version, v1_desc, v1_sql = MIGRATIONS[0]
+    with manager.transaction() as conn:
+        conn.executescript(v1_sql)
+        conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("INSERT INTO schema_migrations VALUES (1, 'v1', ?);", (datetime.now(timezone.utc).isoformat(),))
+
+        t0 = "2026-11-15T00:00:00Z"
+        t1 = "2026-11-15T00:00:01Z"
+        t2 = "2026-11-15T00:00:02Z"
+        t3 = "2026-11-15T00:00:03Z"
+
+        # Parent task P
+        conn.execute("INSERT INTO tasks (id, prompt, status, created_at) VALUES ('parent-dup', 'Parent with dups', 'failed', ?);", (t0,))
+
+        # THREE duplicate continuation tasks all pointing to parent-dup!
+        conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('child-dup-1', 'parent-dup', 'Continuation 1', 'completed', ?);", (t1,))
+        conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('child-dup-2', 'parent-dup', 'Continuation 2', 'completed', ?);", (t2,))
+        conn.execute("INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('child-dup-3', 'parent-dup', 'Continuation 3', 'pending', ?);", (t3,))
+
+        # Dependent transcript records for each duplicate
+        conn.execute("INSERT INTO transcript_messages (id, task_id, sequence_num, role, content, created_at) VALUES ('msg-1', 'child-dup-1', 1, 'user', 'Turn 1', ?);", (t1,))
+        conn.execute("INSERT INTO transcript_messages (id, task_id, sequence_num, role, content, created_at) VALUES ('msg-2', 'child-dup-2', 1, 'user', 'Turn 2', ?);", (t2,))
+        conn.execute("INSERT INTO transcript_messages (id, task_id, sequence_num, role, content, created_at) VALUES ('msg-3', 'child-dup-3', 1, 'user', 'Turn 3', ?);", (t3,))
+
+    # Apply migration 002: MUST NOT fail on duplicate index creation and MUST NOT silently delete records
+    runner = MigrationRunner(manager)
+    applied = runner.run_migrations()
+    assert applied == [2]
+
+    # Verify ZERO records were deleted: all 4 tasks still exist!
+    with manager.connection() as conn:
+        task_ids = [r[0] for r in conn.execute("SELECT id FROM tasks ORDER BY created_at ASC;").fetchall()]
+        assert task_ids == ["parent-dup", "child-dup-1", "child-dup-2", "child-dup-3"], "Zero historical tasks deleted"
+
+        # Verify all transcripts still exist
+        msg_count = conn.execute("SELECT count(*) FROM transcript_messages;").fetchone()[0]
+        assert msg_count == 3, "All child transcripts preserved"
+
+        # Verify linear lineage was reconstructed:
+        # child-dup-1 kept parent-dup
+        # child-dup-2 re-parented to child-dup-1
+        # child-dup-3 re-parented to child-dup-2
+        c1_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-1';").fetchone()[0]
+        c2_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-2';").fetchone()[0]
+        c3_parent = conn.execute("SELECT parent_task_id FROM tasks WHERE id = 'child-dup-3';").fetchone()[0]
+
+        assert c1_parent == "parent-dup"
+        assert c2_parent == "child-dup-1"
+        assert c3_parent == "child-dup-2"
+
+        # Verify audit records in state_transitions exist for the re-parented tasks
+        reparent_transitions = conn.execute(
+            "SELECT entity_id, reason FROM state_transitions WHERE actor = 'migration_002' ORDER BY entity_id ASC;"
+        ).fetchall()
+        assert len(reparent_transitions) == 2
+        assert reparent_transitions[0][0] == "child-dup-2"
+        assert reparent_transitions[1][0] == "child-dup-3"
+
+        # Verify unique index uq_tasks_parent_task is active and blocks new duplicates
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+            conn.execute(
+                "INSERT INTO tasks (id, parent_task_id, prompt, status, created_at) VALUES ('new-dup', 'parent-dup', 'Illegal dup', 'pending', ?);",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+
+    manager.close()
+
 

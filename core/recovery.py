@@ -199,22 +199,14 @@ class StartupRecoveryEngine:
             )
 
         # Check if an active continuation task already exists to prevent duplicate execution
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id FROM tasks WHERE parent_task_id = ? AND status != 'failed';",
-            (original_task_id,),
-        )
-        existing = cursor.fetchone()
-        if existing:
-            existing_rec = self.task_repo.get(existing[0])
-            if existing_rec:
-                logger.info(
-                    "Found existing continuation task %s for original task %s",
-                    existing[0],
-                    original_task_id,
-                )
-                return existing_rec
+        existing_rec = self.task_repo.get_by_parent_task_id(original_task_id)
+        if existing_rec and existing_rec.status != TaskStatus.FAILED:
+            logger.info(
+                "Found existing continuation task %s for original task %s",
+                existing_rec.id,
+                original_task_id,
+            )
+            return existing_rec
 
         # Create new continuation task linked via parent_task_id
         continuation_id = str(uuid.uuid4())
@@ -238,20 +230,33 @@ class StartupRecoveryEngine:
                 original.session_id,
             )
             return saved
-        except sqlite3.IntegrityError:
-            # Concurrency race: another thread committed a continuation task with this parent_task_id
-            cursor.execute(
-                "SELECT id FROM tasks WHERE parent_task_id = ? LIMIT 1;",
-                (original_task_id,),
-            )
-            winner = cursor.fetchone()
-            if winner:
-                winner_rec = self.task_repo.get(winner[0])
+        except sqlite3.IntegrityError as exc:
+            err_msg = str(exc).lower()
+            # Distinguish unique constraint conflict on parent_task_id from other integrity failures (FK, CHECK, NOT NULL)
+            if "parent_task_id" in err_msg or "uq_tasks_parent_task" in err_msg:
+                # Concurrency race on continuation uniqueness constraint.
+                # The losing transaction was already rolled back by DatabaseManager.transaction().
+                # Fetch the winning continuation committed by the winning transaction.
+                winner_rec = self.task_repo.get_by_parent_task_id(original_task_id)
                 if winner_rec:
                     logger.info(
                         "Resolved concurrent continuation race for %s: returning winner task %s",
                         original_task_id,
-                        winner[0],
+                        winner_rec.id,
                     )
                     return winner_rec
+            # Non-uniqueness integrity failure (e.g. invalid FK, check, or null constraint) or missing winner: fail closed!
+            logger.error(
+                "IntegrityError during continuation creation for %s (not a resolved race): %s",
+                original_task_id,
+                exc,
+            )
+            raise
+        except sqlite3.OperationalError as exc:
+            # Distinguish database lock / busy operational errors from integrity conflicts
+            logger.error(
+                "OperationalError (busy/locked) during continuation creation for %s: %s",
+                original_task_id,
+                exc,
+            )
             raise

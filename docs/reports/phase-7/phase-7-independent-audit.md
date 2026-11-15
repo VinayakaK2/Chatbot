@@ -140,17 +140,61 @@ An independent audit was conducted on the Phase 7 implementation to verify:
   3. `consume_token` returns `False` on expired and cancelled authorizations.
 - **Test Evidence:** `tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart` (PASS).
 
+### Review A: Full-Row Update Immutability vs Deletion (VERIFIED & CLOSED)
+- **Finding:** The trigger prevents updates to terminal tasks, but deletion must be verified and accurately characterized.
+- **Audited Solution:**
+  1. Architectural invariant is precisely calibrated: **terminal task records cannot be updated (full-row update immutability)**.
+  2. Deletion is NOT exposed via the public runtime REST API, but is supported as an administrative repository operation (`TaskRepository.delete()`).
+  3. Deleting a task cascades to dependent records (`transcript_messages`, `tool_executions`, `model_calls`, `approvals`), while `state_transitions` has NO foreign key cascade and preserves the linear audit trail permanently.
+- **Test Evidence:** `tests/test_persistence.py::test_terminal_task_deletion_administrative_behavior` (PASS).
+
+### Review B: Unique-Index Migration Compatibility & Non-Destructive Deduplication (VERIFIED & CLOSED)
+- **Finding:** Migration 002 must handle existing databases with pre-existing columns or duplicate `parent_task_id` continuations without silently deleting records.
+- **Audited Solution:**
+  1. `PRAGMA table_info` checks prevent failure if `parent_task_id` already exists.
+  2. Prior to index installation, duplicate continuations are discovered and re-parented into a chronological linear chain (`P -> C1 -> C2 -> ...`), logging state transition audit records.
+  3. **Zero historical task rows or transcripts are deleted**.
+  4. Tested on clean v1, v2 without continuations, valid continuations, and duplicate continuation databases.
+- **Test Evidence:**
+  - `tests/test_persistence.py::test_migration_compatibility_clean_v1_database` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_v2_database_no_continuations` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_valid_continuation_records` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_duplicate_continuation_records_no_silent_deletion` (PASS).
+
+### Review C: Concurrent Continuation Transaction Recovery & Fail-Closed Integrity (VERIFIED & CLOSED)
+- **Finding:** Verify winning transaction commit, losing transaction rollback, fresh transaction winner retrieval, busy/locked error distinction, and fail-closed handling for non-uniqueness integrity errors.
+- **Audited Solution:**
+  1. Winner commits task and state transition atomically.
+  2. Competing collision triggers rollback via `DatabaseManager.transaction()`, leaving zero partial rows or ghost transitions.
+  3. Fresh read fetches the winning continuation.
+  4. Non-uniqueness integrity errors (foreign key, check, not null) fail closed and re-raise.
+  5. Database locked / operational errors (`sqlite3.OperationalError`) are distinguished and re-raised cleanly.
+- **Test Evidence:**
+  - `tests/test_session_recovery.py::test_continuation_winning_and_losing_transaction_rollback` (PASS)
+  - `tests/test_session_recovery.py::test_continuation_non_uniqueness_integrity_error_fails_closed` (PASS)
+  - `tests/test_session_recovery.py::test_continuation_operational_error_busy_locked_distinguished` (PASS).
+
+### Review D: Full-Row Trigger Non-Interference with Legitimate Operations (VERIFIED & CLOSED)
+- **Finding:** Ensure strict full-row trigger does not block normal operations across active tasks, continuations, or recovery.
+- **Audited Solution:**
+  1. Verified normal updates to pending and executing tasks execute cleanly.
+  2. State transition logging operates without trigger interference.
+  3. Continuation task creation succeeds without updating the terminal parent.
+  4. Session context reconstruction loads all data cleanly.
+  5. Startup recovery reconciles interrupted tasks to terminal failed status without conflict.
+- **Test Evidence:** `tests/test_session_recovery.py::test_full_row_trigger_does_not_block_legitimate_operations` (PASS).
+
 ---
 
 ## 5. Test Evidence Summary
 
-- **Total Backend Pytest Tests:** 514 collected, **511 passed**, 3 skipped (live GPU endpoint tests skipped when offline).
+- **Total Backend Pytest Tests:** 523 collected, **522 passed**, 1 skipped (live GPU endpoint tests skipped when offline).
 - **Total Frontend Vitest Tests:** 55 collected, **55 passed**.
-- **Frontend Production Build:** `tsc -b && vite build` succeeded in 207ms with 0 errors.
+- **Frontend Production Build:** `tsc -b && vite build` succeeded in 581ms with 0 errors.
 
 ---
 
 ## 6. Audit Verdict & Recommendation
 
 **Audit Verdict:** `PASS — FULLY COMPLIANT`  
-**Recommendation:** All 6 blocker findings (F7-01 to F7-06) have been rigorously resolved and proven with automated tests. Phase 7 is robust, verified, and **READY FOR OPERATOR FREEZE**.
+**Recommendation:** All blocker findings (F7-01 to F7-06) and review issues (A, B, C, D) have been rigorously resolved and proven with automated tests. Phase 7 is robust, verified, and **READY FOR OPERATOR FREEZE**.

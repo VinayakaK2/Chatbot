@@ -28,7 +28,7 @@ Phase 7 of the Chatbot Agent Runtime project has been fully implemented, rigorou
 ║     • Ephemeral authorization boundary: Stale grants expired on restart  ║
 ║     • Secret scrubbing defense-in-depth: Audited across all tables       ║
 ║     • Session context reconstruction: Complete & ordered                 ║
-║     • Backend test suite: 513 passed, 1 skipped, 0 failed               ║
+║     • Backend test suite: 522 passed, 1 skipped, 0 failed               ║
 ║     • Frontend test suite: 55 passed, 0 failed                           ║
 ║     • Frontend build: 0 TypeScript / bundling errors                     ║
 ║     • Frozen Phase 0–6 regression status: 0 regressions                  ║
@@ -90,18 +90,19 @@ The relational database layer (`storage/`) tracks all execution state across 7 r
 ```
 
 ### 3.3 Ephemeral Security Boundary on Startup (F7-06)
-All volatile approvals in `status IN ('pending', 'approved')` are expired on startup with resolution reason `"Invalidated on process_restart"`. Single-use token consumption returns `False` immediately, ensuring pre-crash authorizations cannot be weaponized.
+All volatile approvals in `status IN ('pending', 'approved')` are expired on startup with resolution reason `"Invalidated on process_restart"`. Single-use token consumption returns `False` immediately, ensuring pre-crash authorizations cannot be weaponized. Verified across all six lifecycle states: `pending`, `approved`, `consumed`, `denied`, `expired`, `cancelled`.
 
 ### 3.4 Secret Scrubbing at Persistence Boundary (F7-03)
-`tools.security.redact_secrets()` sanitizes arguments, outputs, transcripts, prompts, errors, transition reasons, and session metadata before disk writes. Direct raw SQL audits confirm zero plain-text API keys, Bearer tokens, or passwords exist across all 6 tables. Documented as defense-in-depth sanitization.
+`tools.security.redact_secrets()` sanitizes arguments, outputs, transcripts, prompts, errors, transition reasons, and session metadata before disk writes. Direct raw SQL audits confirm zero plain-text API keys, Bearer tokens, or passwords exist across all 6 tables. Documented as defense-in-depth sanitization against tested credential patterns.
 
-### 3.5 Forensic Resolution of Blocker Findings F7-01 to F7-06
-- **F7-01 (Safe Resume & Terminal Immutability):** Interrupted tasks remain immutable in terminal `FAILED` (`interrupted_safe`). Safe resume is executed by generating a new linked continuation task (`parent_task_id = original_task_id`, `status = 'pending'`, `recovery_status = 'repaired'`). Duplicate continuations are idempotently prevented.
-- **F7-02 (Database-Engine-Level Immutability):** Migration `002_immutability_triggers_and_continuations` adds SQLite triggers (`trg_prevent_terminal_task_status_update`, etc.). Direct raw SQL attempts to reactivate terminal tasks fail with `sqlite3.IntegrityError`.
+### 3.5 Forensic Resolution of Blocker Findings & Review Items
+- **F7-01 & Review C (Safe Resume, Continuation Lifecycle & Transaction Recovery):** Interrupted tasks remain immutable in terminal `FAILED` (`interrupted_safe`). Safe resume is executed by generating a new linked continuation task (`parent_task_id = original_task_id`, `status = 'pending'`, `recovery_status = 'repaired'`). Concurrency races are handled atomically: winning transactions commit; losing transactions roll back via `DatabaseManager.transaction()` without leaving orphan rows or ghost state transitions; clean read queries fetch the winner. Database busy/locked errors (`sqlite3.OperationalError`) are distinguished from uniqueness conflicts; non-uniqueness integrity errors fail closed.
+- **F7-02 & Review A (Full-Row Update Immutability vs Deletion):** Migration `002_immutability_triggers_and_continuations` adds SQLite trigger `trg_prevent_terminal_task_update` on `BEFORE UPDATE ON tasks`. Direct raw SQL attempts to update ANY column of terminal tasks fail with `sqlite3.IntegrityError`. Deletion is intentionally restricted to low-level administrative operations (`TaskRepository.delete()`), never exposed on public REST APIs; child rows cascade via FKs, while `state_transitions` has NO foreign key cascade and preserves the linear audit trail permanently.
 - **F7-03 (Secret-Free Persistence Across All Tables):** Scrubbing is verified across every table directly in SQLite storage, with zero secrets leaked.
-- **F7-04 (Migration Upgrade & Rollback):** Upgrading from v1 to v2 preserves 100% of data and activates triggers. Failed migrations roll back cleanly without schema corruption.
+- **F7-04 & Review B (Migration Upgrade, Rollback & Non-Destructive Deduplication):** Upgrading from v1 to v2 preserves 100% of data. Migration 002 includes backward-compatible column checks (`PRAGMA table_info`) and resolves pre-existing duplicate continuations by re-parenting them into a chronological linear chain with state transition audit logging without deleting ANY historical records. Tested across clean v1, v2 without continuations, valid continuations, and duplicate continuation databases. Failed migrations roll back cleanly without schema corruption.
 - **F7-05 (Runtime ToolRegistry Authority):** Tool safety classification is runtime-owned via `ToolRegistry`. Unknown tools and mutating tools with forged DB flags default fail-closed to `NEEDS_REVIEW`.
-- **F7-06 (All 5 Approval States on Restart):** Both `pending` and unconsumed `approved` grants expire on restart. `consumed`, `denied`, and `expired` records remain immutable.
+- **F7-06 (All 6 Approval States on Restart):** Both `pending` and unconsumed `approved` grants expire on restart. `consumed`, `denied`, `expired`, and `cancelled` records remain immutable.
+- **Review D (Full-Row Trigger Non-Interference):** Verified that the full-row immutability trigger does not block legitimate operations across pending task updates, executing task updates, state transition logging, continuation creation, session context reconstruction, and startup recovery passes.
 
 ---
 
@@ -114,10 +115,10 @@ All volatile approvals in `status IN ('pending', 'approved')` are expired on sta
 - **Phase 7 Regression Evidence:** [`docs/reports/phase-7/phase-7-regression-evidence.md`](file:///h:/chatbot/docs/reports/phase-7/phase-7-regression-evidence.md)
 
 ### Test Totals
-- **Backend Tests:** **510 passed**, 3 skipped, 0 failed.
-- **Phase 7 Direct Tests:** **31 passed** (13 persistence + 12 recovery + 6 session API).
-- **Frontend Tests:** **52 passed**, 0 failed.
-- **Frontend Build:** Clean compilation, 0 errors (314ms).
+- **Backend Tests:** **522 passed**, 1 skipped, 0 failed.
+- **Phase 7 Direct Tests:** **41 passed** (18 persistence + 17 recovery + 6 session API).
+- **Frontend Tests:** **55 passed**, 0 failed.
+- **Frontend Build:** Clean compilation, 0 errors (581ms).
 
 ---
 

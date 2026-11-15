@@ -10,9 +10,13 @@ Mandatory verification requirements:
 - Verifies terminal task immutability across recovery passes.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
-import pytest
+import sqlite3
 from typing import Generator
+import uuid
+
+import pytest
 
 from api.schemas.tasks import TaskStatus
 from core.recovery import StartupRecoveryEngine
@@ -29,6 +33,7 @@ from storage.models import (
     SessionRecord,
     SessionStatus,
     TaskRecord,
+    TranscriptMessageRecord,
 )
 from storage.repositories import (
     ApprovalRepository,
@@ -741,3 +746,245 @@ def test_recovery_continuation_task_concurrent_race_prevention(disk_db_path: Pat
         assert count == 1
 
     db2.close()
+
+
+def test_continuation_winning_and_losing_transaction_rollback(disk_db_path: Path) -> None:
+    """Verify Item C: When a continuation race occurs, the losing transaction rolls back cleanly
+    without leaving orphan task rows or ghost state transition audit records.
+    """
+    db = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db.get_connection())
+    session_repo = SessionRepository(db)
+    task_repo = TaskRepository(db)
+
+    session = session_repo.create_session(title="Rollback Verification Session")
+    task = task_repo.create_task(prompt="Rollback test prompt", session_id=session.id)
+    task_repo.transition_state(
+        task_id=task.id,
+        target_status=TaskStatus.FAILED,
+        recovery_status=RecoveryStatus.INTERRUPTED_SAFE,
+        reason="Interrupted cleanly",
+    )
+
+    recovery = StartupRecoveryEngine(db)
+
+    # Count state transitions before continuation creation
+    with db.connection() as conn:
+        initial_transitions_count = conn.execute(
+            "SELECT count(*) FROM state_transitions WHERE entity_type = 'task';"
+        ).fetchone()[0]
+
+    # Create the winning continuation
+    winner = recovery.create_continuation_task(task.id)
+    assert winner.parent_task_id == task.id
+
+    with db.connection() as conn:
+        post_winner_transitions_count = conn.execute(
+            "SELECT count(*) FROM state_transitions WHERE entity_type = 'task';"
+        ).fetchone()[0]
+        # Winner must have added exactly 1 initial creation state transition
+        assert post_winner_transitions_count == initial_transitions_count + 1
+
+    # Now attempt a direct competing transaction insert that collides with the unique index
+    competing_task_id = str(uuid.uuid4())
+    competing_task = TaskRecord(
+        id=competing_task_id,
+        session_id=session.id,
+        parent_task_id=task.id,
+        prompt="Competing duplicate prompt",
+        status=TaskStatus.PENDING,
+        recovery_status=RecoveryStatus.REPAIRED,
+    )
+
+    # Calling task_repo.create directly must fail with IntegrityError on unique constraint
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+        task_repo.create(competing_task)
+
+    # Verify that the losing transaction was completely rolled back:
+    # 1. No task row with competing_task_id exists
+    assert task_repo.get(competing_task_id) is None
+
+    # 2. No state transition was recorded for the rolled-back competing task
+    with db.connection() as conn:
+        competing_transitions = conn.execute(
+            "SELECT count(*) FROM state_transitions WHERE entity_id = ?;",
+            (competing_task_id,),
+        ).fetchone()[0]
+        assert competing_transitions == 0, "Rolled back transaction must not leave ghost state transitions"
+
+        # 3. Total task transitions count must remain unchanged
+        current_transitions_count = conn.execute(
+            "SELECT count(*) FROM state_transitions WHERE entity_type = 'task';"
+        ).fetchone()[0]
+        assert current_transitions_count == post_winner_transitions_count
+
+    # 4. Calling create_continuation_task again fetches the committed winner using a clean read
+    resolved = recovery.create_continuation_task(task.id)
+    assert resolved.id == winner.id
+
+    db.close()
+
+
+def test_continuation_non_uniqueness_integrity_error_fails_closed(disk_db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Item C: An IntegrityError must not be treated as proof of duplicate continuation.
+    Non-uniqueness integrity errors (foreign key, check, not null) fail closed immediately.
+    """
+    db = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db.get_connection())
+    session_repo = SessionRepository(db)
+    task_repo = TaskRepository(db)
+
+    session = session_repo.create_session(title="Fail Closed Integrity Session")
+    task = task_repo.create_task(prompt="Integrity error test", session_id=session.id)
+    task_repo.transition_state(
+        task_id=task.id,
+        target_status=TaskStatus.FAILED,
+        recovery_status=RecoveryStatus.INTERRUPTED_SAFE,
+        reason="Interrupted cleanly",
+    )
+
+    recovery = StartupRecoveryEngine(db)
+
+    # Simulate a foreign key or check constraint IntegrityError on task_repo.create
+    def mock_create_fk_failure(record: TaskRecord):
+        raise sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+
+    monkeypatch.setattr(recovery.task_repo, "create", mock_create_fk_failure)
+
+    # create_continuation_task MUST NOT swallow or attempt to fetch a winner; it must re-raise
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
+        recovery.create_continuation_task(task.id)
+
+    db.close()
+
+
+def test_continuation_operational_error_busy_locked_distinguished(disk_db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Item C: Operational errors (database locked or busy) are distinguished from
+    uniqueness integrity conflicts and re-raised cleanly.
+    """
+    db = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db.get_connection())
+    session_repo = SessionRepository(db)
+    task_repo = TaskRepository(db)
+
+    session = session_repo.create_session(title="Operational Error Session")
+    task = task_repo.create_task(prompt="Busy lock test", session_id=session.id)
+    task_repo.transition_state(
+        task_id=task.id,
+        target_status=TaskStatus.FAILED,
+        recovery_status=RecoveryStatus.INTERRUPTED_SAFE,
+        reason="Interrupted cleanly",
+    )
+
+    recovery = StartupRecoveryEngine(db)
+
+    # Simulate a database locked operational error
+    def mock_create_locked(record: TaskRecord):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(recovery.task_repo, "create", mock_create_locked)
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        recovery.create_continuation_task(task.id)
+
+    db.close()
+
+
+def test_full_row_trigger_does_not_block_legitimate_operations(disk_db_path: Path) -> None:
+    """Verify Item D: Full-row terminal immutability trigger does NOT block legitimate operations:
+    1. Normal updates to pending tasks.
+    2. Normal updates to executing tasks.
+    3. State-transition audit logging.
+    4. Continuation task creation.
+    5. Session context reconstruction.
+    6. Startup recovery classification and transition to terminal states.
+    """
+    db = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db.get_connection())
+    session_repo = SessionRepository(db)
+    task_repo = TaskRepository(db)
+    transcript_repo = TranscriptRepository(db)
+    session_mgr = SessionManager(db)
+
+    session = session_repo.create_session(title="Legitimate Operations Session")
+
+    # 1. Normal updates to pending tasks
+    pending_task = task_repo.create_task(prompt="Initial pending prompt", session_id=session.id)
+    with db.transaction() as conn:
+        conn.execute("UPDATE tasks SET prompt = 'Updated pending prompt' WHERE id = ?;", (pending_task.id,))
+    updated_pending = task_repo.get(pending_task.id)
+    assert updated_pending.prompt == "Updated pending prompt"
+
+    # Transition pending -> executing
+    task_repo.transition_state(pending_task.id, TaskStatus.EXECUTING)
+    assert task_repo.get(pending_task.id).status == TaskStatus.EXECUTING
+
+    # 2. Normal updates to executing tasks
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE tasks SET response_text = 'In-progress text', iterations = 3, tool_calls_count = 2 WHERE id = ?;",
+            (pending_task.id,),
+        )
+    executing_task = task_repo.get(pending_task.id)
+    assert executing_task.response_text == "In-progress text"
+    assert executing_task.iterations == 3
+    assert executing_task.tool_calls_count == 2
+
+    # 3. State-transition audit logging
+    task_repo.transition_state(
+        task_id=pending_task.id,
+        target_status=TaskStatus.COMPLETED,
+        response_text="Final result",
+        reason="Completed successfully",
+    )
+    transitions = task_repo.get_state_transitions(pending_task.id)
+    assert len(transitions) == 3  # NONE->PENDING, PENDING->EXECUTING, EXECUTING->COMPLETED
+
+    # 4. Continuation task creation for an interrupted task
+    interrupted_task = task_repo.create_task(prompt="Task to interrupt", session_id=session.id)
+    task_repo.transition_state(interrupted_task.id, TaskStatus.EXECUTING)
+    task_repo.transition_state(
+        interrupted_task.id,
+        TaskStatus.FAILED,
+        recovery_status=RecoveryStatus.INTERRUPTED_SAFE,
+        reason="Process crash",
+    )
+
+    recovery = StartupRecoveryEngine(db)
+    continuation = recovery.create_continuation_task(interrupted_task.id)
+    assert continuation.parent_task_id == interrupted_task.id
+    assert continuation.status == TaskStatus.PENDING
+    assert continuation.recovery_status == RecoveryStatus.REPAIRED
+
+    # 5. Session context reconstruction
+    transcript_repo.append(
+        TranscriptMessageRecord(
+            id=str(uuid.uuid4()),
+            session_id=session.id,
+            task_id=pending_task.id,
+            sequence_num=1,
+            role="user",
+            content="Run audit",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    )
+    session_context = session_mgr.load_session_context(session.id)
+    assert session_context is not None
+    assert session_context["session"]["id"] == session.id
+    assert len(session_context["tasks"]) >= 2
+    assert len(session_context["transcript"]) >= 1
+
+    # 6. Startup recovery flow
+    task_to_recover = task_repo.create_task(prompt="In-flight at restart", session_id=session.id)
+    task_repo.transition_state(task_to_recover.id, TaskStatus.EXECUTING)
+
+    recovery2 = StartupRecoveryEngine(db)
+    summary = recovery2.reconcile(auto_create_continuations=True)
+    assert summary.interrupted_tasks_found >= 1
+
+    recovered_record = task_repo.get(task_to_recover.id)
+    assert recovered_record.status == TaskStatus.FAILED
+    assert recovered_record.recovery_status == RecoveryStatus.INTERRUPTED_SAFE
+
+    db.close()
+

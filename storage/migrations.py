@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 logger = logging.getLogger("agent_runtime.storage.migrations")
 
@@ -236,7 +237,10 @@ class MigrationRunner:
 
             logger.info("Applying database migration %d: %s", version, description)
             cursor = conn.cursor()
-            cursor.executescript(ddl)
+            if version == 2:
+                cls._apply_migration_002(conn)
+            else:
+                cursor.executescript(ddl)
             now_iso = datetime.now(timezone.utc).isoformat()
             cursor.execute(
                 "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?);",
@@ -245,3 +249,138 @@ class MigrationRunner:
             new_count += 1
 
         return new_count
+
+    @classmethod
+    def _apply_migration_002(cls, conn: sqlite3.Connection) -> None:
+        """Apply migration 002 with column existence check and non-destructive continuation deduplication.
+
+        Handles:
+        1. Adding parent_task_id column if not present (PRAGMA table_info check).
+        2. Re-linking any existing duplicate continuations into chronological linear chains
+           to satisfy unique constraint uq_tasks_parent_task WITHOUT deleting any historical records.
+        3. Installing unique partial index uq_tasks_parent_task.
+        4. Installing database-level triggers enforcing full-row terminal immutability and valid state transitions.
+        """
+        cursor = conn.cursor()
+
+        # 1. Safely add parent_task_id column if not already present
+        cursor.execute("PRAGMA table_info(tasks);")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if "parent_task_id" not in existing_cols:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;")
+
+        # 2. Re-link duplicate continuations to satisfy unique partial index without deleting history
+        cursor.execute(
+            """
+            SELECT parent_task_id, COUNT(*) as cnt
+            FROM tasks
+            WHERE parent_task_id IS NOT NULL
+            GROUP BY parent_task_id
+            HAVING cnt > 1;
+            """
+        )
+        duplicate_parents = [row[0] for row in cursor.fetchall()]
+
+        for parent_id in duplicate_parents:
+            cursor.execute(
+                """
+                SELECT id, status, created_at
+                FROM tasks
+                WHERE parent_task_id = ?
+                ORDER BY created_at ASC, id ASC;
+                """,
+                (parent_id,),
+            )
+            children = cursor.fetchall()
+            if len(children) <= 1:
+                continue
+
+            # First child remains linked to parent_id (winner/primary continuation)
+            # Subsequent duplicate children are chained to form a valid linear lineage
+            current_parent_id = children[0][0]
+            for dup_row in children[1:]:
+                dup_id = dup_row[0]
+                dup_status = dup_row[1]
+
+                # Find tail of chain starting from current_parent_id to avoid creating new duplicates
+                tail_id = current_parent_id
+                while True:
+                    cursor.execute("SELECT id FROM tasks WHERE parent_task_id = ? LIMIT 1;", (tail_id,))
+                    next_child = cursor.fetchone()
+                    if next_child and next_child[0] != dup_id:
+                        tail_id = next_child[0]
+                    else:
+                        break
+
+                # Re-link duplicate to tail_id
+                cursor.execute(
+                    "UPDATE tasks SET parent_task_id = ? WHERE id = ?;",
+                    (tail_id, dup_id),
+                )
+                now_iso = datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    """
+                    INSERT INTO state_transitions (id, entity_type, entity_id, from_state, to_state, reason, actor, created_at)
+                    VALUES (?, 'task', ?, ?, ?, ?, 'migration_002', ?);
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        dup_id,
+                        dup_status,
+                        dup_status,
+                        f"Migration 002: Re-parented duplicate continuation of parent {parent_id} to {tail_id} to enforce uniqueness without record deletion",
+                        now_iso,
+                    ),
+                )
+                logger.warning(
+                    "Migration 002: Re-linked duplicate continuation task %s (parent was %s) to %s to satisfy uniqueness constraint without deleting records",
+                    dup_id,
+                    parent_id,
+                    tail_id,
+                )
+                current_parent_id = dup_id
+
+        # 3. Create unique partial index
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_parent_task
+            ON tasks(parent_task_id)
+            WHERE parent_task_id IS NOT NULL;
+            """
+        )
+
+        # 4. Install database triggers
+        cursor.execute("DROP TRIGGER IF EXISTS trg_prevent_terminal_task_status_update;")
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_update
+            BEFORE UPDATE ON tasks
+            FOR EACH ROW
+            WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')
+            BEGIN
+                SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable');
+            END;
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_pending_transition
+            BEFORE UPDATE OF status ON tasks
+            FOR EACH ROW
+            WHEN OLD.status = 'pending' AND NEW.status NOT IN ('executing', 'cancelled', 'failed')
+            BEGIN
+                SELECT RAISE(ABORT, 'Illegal database state transition: pending tasks may only transition to executing, cancelled, or failed');
+            END;
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_executing_transition
+            BEFORE UPDATE OF status ON tasks
+            FOR EACH ROW
+            WHEN OLD.status = 'executing' AND NEW.status NOT IN ('completed', 'failed', 'cancelled', 'limit_reached')
+            BEGIN
+                SELECT RAISE(ABORT, 'Illegal database state transition: executing tasks may only transition to terminal states');
+            END;
+            """
+        )

@@ -176,6 +176,73 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 
 ---
 
+### ADV-14: Administrative Deletion vs Full-Row Update Immutability
+- **Scenario:** An administrator or maintenance process invokes `task_repo.delete(task_id)` to purge a terminal task, or a rogue caller attempts an SQL `UPDATE` on a terminal task.
+- **Threat:** Claiming terminal tasks "cannot be removed" when deletion is permitted, or permitting modification of terminal task fields.
+- **Defense Implementation:**
+  - `trg_prevent_terminal_task_update` strictly blocks all SQL `UPDATE` statements on terminal tasks (full-row update immutability).
+  - Deletion is NOT exposed via the public runtime REST API, but is explicitly permitted at the administrative repository layer.
+  - Foreign key cascades clean up child records (`transcript_messages`, `tool_executions`, `model_calls`, `approvals`), while `state_transitions` has NO foreign key cascade and preserves the linear audit trail permanently.
+- **Observed Evidence:**
+  - Direct SQL `UPDATE` fails with `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable`.
+  - Administrative deletion removes the task row and cascades child rows; all historical `state_transitions` remain 100% intact.
+- **Test Proof:** `tests/test_persistence.py::test_terminal_task_deletion_administrative_behavior` (PASS).
+
+---
+
+### ADV-15: Migration 002 Non-Destructive Deduplication on Pre-Existing Data
+- **Scenario:** An existing database has duplicate continuation records pointing to the same `parent_task_id` before Migration 002 installs the unique partial index `uq_tasks_parent_task`.
+- **Threat:** Migration failure on `CREATE UNIQUE INDEX`, or naive migrations silently deleting historical task rows to pass constraint checks.
+- **Defense Implementation:**
+  - Migration 002 inspects existing continuations before index creation.
+  - Duplicate continuations are chronologically re-parented into a valid linear chain (`P -> C1 -> C2 -> ...`), inserting audit records into `state_transitions`.
+  - Zero historical task rows, transcripts, or execution records are deleted.
+- **Observed Evidence:**
+  - Tested on a database with 3 duplicate continuation records: migration succeeds cleanly without error.
+  - All 4 tasks (parent + 3 children) and their transcripts remain present; linear lineage is reconstructed; unique partial index activates successfully.
+- **Test Proof:**
+  - `tests/test_persistence.py::test_migration_compatibility_clean_v1_database` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_v2_database_no_continuations` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_valid_continuation_records` (PASS)
+  - `tests/test_persistence.py::test_migration_compatibility_duplicate_continuation_records_no_silent_deletion` (PASS).
+
+---
+
+### ADV-16: Continuation Transaction Rollback & Fail-Closed Integrity Handling
+- **Scenario:** A competing continuation attempt collides with the unique constraint, or an unrelated database error occurs (e.g. invalid foreign key, check constraint, or database locked).
+- **Threat:** Competing transactions leaving ghost state transitions or orphan task rows; or treating every `IntegrityError` as proof of duplicate continuation.
+- **Defense Implementation:**
+  - `DatabaseManager.transaction()` rolls back the losing transaction upon exception, leaving zero partial rows or ghost transitions.
+  - `create_continuation_task` checks the error string: only specific unique constraint collisions on `parent_task_id` or `uq_tasks_parent_task` resolve to the winner.
+  - Non-uniqueness errors (foreign key, check, not null) fail closed and re-raise.
+  - Operational errors (`sqlite3.OperationalError` / database locked) are distinguished from integrity errors and re-raised cleanly.
+- **Observed Evidence:**
+  - Losing transaction leaves 0 orphan state transitions or task records.
+  - Foreign key and check failures re-raise `sqlite3.IntegrityError` without returning a bogus winner.
+  - Locked database errors re-raise `sqlite3.OperationalError`.
+- **Test Proof:**
+  - `tests/test_session_recovery.py::test_continuation_winning_and_losing_transaction_rollback` (PASS)
+  - `tests/test_session_recovery.py::test_continuation_non_uniqueness_integrity_error_fails_closed` (PASS)
+  - `tests/test_session_recovery.py::test_continuation_operational_error_busy_locked_distinguished` (PASS).
+
+---
+
+### ADV-17: Full-Row Trigger Non-Interference with Legitimate Operations
+- **Scenario:** Normal operations run across tasks, state transitions, continuations, session context reconstruction, and startup recovery passes.
+- **Threat:** A strict database trigger accidentally blocking valid updates on active tasks or breaking recovery flows.
+- **Defense Implementation:**
+  - `trg_prevent_terminal_task_update` specifically triggers `WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')`.
+  - Active tasks (`pending`, `executing`) are unhindered; state transitions, continuation creations, context loading, and startup recovery execute seamlessly.
+- **Observed Evidence:**
+  - Updating pending and executing tasks succeeds.
+  - State transitions are logged accurately.
+  - Continuation tasks are created for terminal parent tasks without updating the parent.
+  - Session context reconstruction loads all data cleanly.
+  - Startup recovery reconciles interrupted tasks to terminal failed status without conflict.
+- **Test Proof:** `tests/test_session_recovery.py::test_full_row_trigger_does_not_block_legitimate_operations` (PASS).
+
+---
+
 ## 3. Summary Verdict
 
 All adversarial, edge-case, and crash-boundary scenarios pass with 100% compliance. The persistence and recovery subsystems guarantee:
@@ -184,4 +251,6 @@ All adversarial, edge-case, and crash-boundary scenarios pass with 100% complian
 3. Fail-closed security for human approvals across all six lifecycle states.
 4. Defense-in-depth sanitization of tested credentials on disk across all tables.
 5. Linearizable optimistic concurrency control and unique-index-enforced continuation concurrency safety.
-6. Database-engine-level enforcement of full-row terminal immutability via SQLite triggers.
+6. Database-engine-level enforcement of full-row terminal update immutability via SQLite triggers.
+7. Backward-compatible, non-destructive migration deduplication preserving 100% of historical records.
+8. Full isolation and transactional rollback for competing concurrent continuation attempts.

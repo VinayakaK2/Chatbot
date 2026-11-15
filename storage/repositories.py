@@ -234,6 +234,20 @@ class TaskRepository:
             d["recovery_status"] = RecoveryStatus(d["recovery_status"])
         return TaskRecord(**d)
 
+    def get_by_parent_task_id(self, parent_task_id: str) -> Optional[TaskRecord]:
+        """Retrieve the continuation task record linked to a given parent task ID, if one exists."""
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tasks WHERE parent_task_id = ? LIMIT 1;", (parent_task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        d = _row_to_dict(row)
+        d["status"] = TaskStatus(d["status"])
+        if d.get("recovery_status"):
+            d["recovery_status"] = RecoveryStatus(d["recovery_status"])
+        return TaskRecord(**d)
+
     def list_for_session(self, session_id: str) -> List[TaskRecord]:
         """List tasks belonging to a session in chronological order."""
         conn = self.db.get_connection()

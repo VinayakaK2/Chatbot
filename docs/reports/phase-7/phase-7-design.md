@@ -409,8 +409,8 @@ END;
 
 ## 4. Remediation & Operational Invariants (Findings F7-01 to F7-06 & Refinements)
 
-### 4.1 F7-01 & Issue 3: Continuation Task Pattern & Concurrency Protection
-A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is strictly immutable. To resume execution without violating terminal immutability:
+### 4.1 F7-01, Issue 3 & Review C: Continuation Task Pattern, Concurrency Protection & Transaction Recovery
+A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is strictly immutable against updates. To resume execution without violating terminal immutability:
 1. The interrupted task remains in `FAILED` status indefinitely, serving as an immutable historical record.
 2. The operator or runtime invokes `create_continuation_task(original_task_id)` / `POST /api/tasks/{task_id}/resume`.
 3. A new task record is created with:
@@ -419,16 +419,27 @@ A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is s
    - `status = 'pending'`
    - `recovery_status = 'repaired'`
    - `prompt = original_task.prompt`
-4. **Concurrency Race Protection:**
+4. **Concurrency Race Protection & Atomic Transaction Recovery:**
    - The database enforces a partial unique index: `uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;`.
-   - If two or more simultaneous resume requests race to execute, one commits and any concurrent racer encounters a unique constraint integrity error. `StartupRecoveryEngine.create_continuation_task` catches `sqlite3.IntegrityError` and returns the winning continuation task.
+   - If two or more simultaneous resume requests race to execute, the winning transaction commits the continuation task and its initial creation state transition.
+   - Any competing transaction encounters a unique constraint violation and receives `sqlite3.IntegrityError`.
+   - `DatabaseManager.transaction()` catches the exception and executes `conn.rollback()`, ensuring that no partial task records or ghost state transitions remain from the losing attempt.
+   - `StartupRecoveryEngine.create_continuation_task` explicitly inspects the error message: only if the error specifically reflects the `parent_task_id` or `uq_tasks_parent_task` constraint does it resolve the race by fetching the committed winning continuation task using a fresh read query.
+   - Non-uniqueness integrity errors (e.g. invalid foreign keys, CHECK violations, NOT NULL constraints) fail closed immediately and are re-raised; an `IntegrityError` is never blindly assumed to be a continuation race.
+   - Database busy/locked operational errors (`sqlite3.OperationalError`) are distinguished from uniqueness integrity conflicts and re-raised cleanly.
    - Tested and proven with 10 concurrent threads simultaneously issuing resume requests: exactly ONE continuation is persisted, and all callers receive the identical task ID.
 5. Attempting to resume a `NEEDS_REVIEW` task raises `ValueError`.
 
-### 4.2 F7-02 & Issue 1: Database-Engine-Level Full-Row Immutability Enforcement
-Terminal state immutability is enforced at the SQLite engine level for the entire row:
+### 4.2 F7-02, Issue 1 & Review A: Database-Engine-Level Full-Row Update Immutability vs Deletion
+Terminal state immutability is enforced at the SQLite engine level:
 - `trg_prevent_terminal_task_update` runs `BEFORE UPDATE ON tasks` (not merely on `status`).
 - Any raw SQL attempting to modify ANY column (`prompt`, `error`, `response_text`, `recovery_status`, `termination_reason`, `parent_task_id`, etc.) of a terminal task raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable`.
+- **Update Immutability versus Administrative Deletion:**
+  - The architectural invariant is that **terminal task records cannot be updated**. Once a task enters a terminal status (`completed`, `cancelled`, `failed`, `limit_reached`), no SQL `UPDATE` may alter its data.
+  - Deletion is NOT exposed via the public runtime REST API.
+  - Deletion exists strictly as a low-level administrative repository method (`TaskRepository.delete(task_id: str)`) for database pruning, test fixtures, or administrative maintenance.
+  - When an administrative delete occurs, cascading foreign keys remove dependent execution records (`transcript_messages`, `tool_executions`, `model_calls`, `approvals`).
+  - However, the `state_transitions` audit log table has NO foreign key dependency on `tasks(id)`; all linear state transition records for the task remain permanently preserved in the database, maintaining complete historical auditability.
 
 ### 4.3 F7-03 & Issue 4: Secret Sanitization Defense-in-Depth
 Credential sanitization (`redact_secrets`) is applied on all database write paths:
@@ -441,9 +452,18 @@ Credential sanitization (`redact_secrets`) is applied on all database write path
 - runtime event logs: `payload`
 *Defense-in-depth qualification:* Regex scrubbing provides active sanitization against tested credential patterns (Anthropic API keys, GitHub PATs, Bearer tokens, passwords). Testing verifies that known token patterns are detected and redacted on all recorded write paths; it is documented as defense-in-depth sanitization rather than an absolute guarantee against every conceivable secret format.
 
-### 4.4 F7-04: Versioned Migration Upgrade and Rollback
+### 4.4 F7-04 & Review B: Versioned Migration Upgrade, Non-Destructive Deduplication & Rollback
 - MigrationRunner tracks migrations sequentially in `schema_migrations`.
 - Upgrading from v1 (`001_initial_schema`) to v2 (`002_immutability_triggers_and_continuations`) preserves 100% of existing rows without data loss.
+- **Migration Compatibility & Non-Destructive Continuation Deduplication:**
+  - `_apply_migration_002` checks `PRAGMA table_info` before executing `ALTER TABLE tasks ADD COLUMN parent_task_id`, ensuring smooth upgrades on existing databases where the column was already defined.
+  - If pre-v2 data contains duplicate `parent_task_id` relationships (e.g. from historical uncoordinated continuation creation), Migration 002 resolves the duplicate continuation tasks by re-parenting them into a chronological linear chain (`P -> C1 -> C2 -> ...`), recording a state transition audit log for each re-parented task.
+  - **Zero historical task records or transcripts are deleted** to make the migration pass.
+  - Tested across:
+    1. Clean v1 schema database.
+    2. v2 database with no continuation records (idempotent).
+    3. Database with valid continuation records (all preserved).
+    4. Database with duplicate continuation relationships (100% records preserved, linear chain created, unique index active).
 - In-flight migration failures abort via transactional rollback, leaving the schema clean without orphan tables.
 
 ### 4.5 F7-05: Runtime-Owned Tool Classification Authority

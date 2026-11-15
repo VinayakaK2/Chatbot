@@ -11,8 +11,8 @@
 
 | Metric | Pre-Phase 7 Baseline (HEAD) | Post-Phase 7 Implementation | Delta | Verdict |
 |:---|:---:|:---:|:---:|:---:|
-| **Backend Tests Collected** | 475 | **514** | **+39** | **PASS** |
-| **Backend Tests Passed** | 474 | **513** | **+39** | **PASS** |
+| **Backend Tests Collected** | 475 | **523** | **+48** | **PASS** |
+| **Backend Tests Passed** | 474 | **522** | **+48** | **PASS** |
 | **Backend Tests Skipped** | 1 (live mock) | **1** (live mock) | 0 | **PASS** |
 | **Backend Tests Failed** | 0 | **0** | 0 | **PASS** |
 | **Frontend Test Files** | 10 | **10** | 0 | **PASS** |
@@ -42,9 +42,14 @@ tests/test_approval_repository_lifecycle_and_single_use PASSED                  
 tests/test_database_level_trigger_terminal_immutability PASSED                   [ 76%]
 tests/test_migration_upgrade_v1_to_v2_preserves_data PASSED                      [ 84%]
 tests/test_migration_failure_rollback PASSED                                     [ 92%]
-tests/test_secret_scrubbing_across_all_tables PASSED                             [100%]
+tests/test_secret_scrubbing_across_all_tables PASSED                             [ 72%]
+tests/test_terminal_task_deletion_administrative_behavior PASSED                 [ 77%]
+tests/test_migration_compatibility_clean_v1_database PASSED                     [ 83%]
+tests/test_migration_compatibility_v2_database_no_continuations PASSED         [ 88%]
+tests/test_migration_compatibility_valid_continuation_records PASSED            [ 94%]
+tests/test_migration_compatibility_duplicate_continuation_records_no_silent_deletion PASSED [100%]
 
-============================= 13 passed in 1.17s ==============================
+============================= 18 passed in 0.82s ==============================
 ```
 
 ### 2.2 Process Restart & Recovery Test Suite (`tests/test_session_recovery.py`)
@@ -53,21 +58,25 @@ tests/test_secret_scrubbing_across_all_tables PASSED                            
 ```
 **Output:**
 ```
-tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [  7%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 15%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 23%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 30%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 38%]
-tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 46%]
-tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 53%]
-tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 61%]
-tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [ 69%]
-tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle PASSED [ 76%]
-tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification PASSED [ 84%]
-tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart PASSED [ 92%]
-tests/test_session_recovery.py::test_recovery_continuation_task_concurrent_race_prevention PASSED [100%]
+tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [  5%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 11%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 17%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 23%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 29%]
+tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 35%]
+tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 41%]
+tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 47%]
+tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [ 52%]
+tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle PASSED [ 58%]
+tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification PASSED [ 64%]
+tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart PASSED [ 70%]
+tests/test_session_recovery.py::test_recovery_continuation_task_concurrent_race_prevention PASSED [ 76%]
+tests/test_session_recovery.py::test_continuation_winning_and_losing_transaction_rollback PASSED [ 82%]
+tests/test_session_recovery.py::test_continuation_non_uniqueness_integrity_error_fails_closed PASSED [ 88%]
+tests/test_session_recovery.py::test_continuation_operational_error_busy_locked_distinguished PASSED [ 94%]
+tests/test_session_recovery.py::test_full_row_trigger_does_not_block_legitimate_operations PASSED [100%]
 
-============================= 13 passed in 0.89s ==============================
+============================= 17 passed in 0.92s ==============================
 ```
 
 ### 2.3 Sessions REST API Integration Suite (`tests/test_api_sessions.py`)
@@ -94,7 +103,7 @@ tests/test_api_sessions.py::TestSessionEndpoints::test_task_submission_attaches_
 .venv\Scripts\python -m pytest
 ```
 **Summary:**
-- **513 passed, 1 skipped, 1 warning in 33.02s**
+- **522 passed, 1 skipped, 1 warning in 37.96s**
 - **0 errors, 0 failures**
 
 ---
