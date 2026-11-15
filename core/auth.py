@@ -5,13 +5,16 @@ Enforces that:
 1. Unauthenticated callers cannot execute privileged actions (e.g. custom verification).
 2. Authenticated non-operators are denied privileged actions (HTTP 403 Forbidden).
 3. Authenticated operators have their actions attributed to their verified principal identity.
+4. Hardcoded development/test tokens are strictly rejected in production environments.
 """
 
 from enum import Enum
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
+
+from core.config import Settings, get_settings
 
 logger = logging.getLogger("agent_runtime.core.auth")
 
@@ -31,9 +34,11 @@ class Principal(BaseModel):
     role: PrincipalRole
 
 
-# Standard pre-configured token map for local runtime authentication
-# In production, this integrates with external OAuth2/OIDC/API-key providers
-DEFAULT_PRINCIPAL_TOKENS: Dict[str, Principal] = {
+# Standard pre-configured test/development token map.
+# CRITICAL SECURITY INVARIANT:
+# In production (settings.environment == "production"), these tokens are NEVER accepted.
+# Production operator authentication requires explicit configuration via OPERATOR_API_TOKENS.
+TEST_DEV_PRINCIPAL_TOKENS: Dict[str, Principal] = {
     "op-secret-token-3891": Principal(identity="operator_admin", role=PrincipalRole.OPERATOR),
     "dev-operator-token": Principal(identity="dev_operator", role=PrincipalRole.OPERATOR),
     "viewer-token-9912": Principal(identity="guest_viewer", role=PrincipalRole.VIEWER),
@@ -44,8 +49,18 @@ DEFAULT_PRINCIPAL_TOKENS: Dict[str, Principal] = {
 def authenticate_principal(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    settings: Settings = Depends(get_settings),
 ) -> Optional[Principal]:
     """Resolve and validate caller credentials against recognized principals.
+
+    Security Boundaries:
+    1. In production (environment == "production"):
+       - Hardcoded test/dev tokens are strictly forbidden.
+       - Operator credentials must be configured via environment settings (OPERATOR_API_TOKENS).
+       - Fails closed if no operator tokens match or if test tokens are presented.
+    2. In non-production (development / test):
+       - Explicitly configured operator tokens take precedence.
+       - Falls back to TEST_DEV_PRINCIPAL_TOKENS for automated test harnesses and local development.
 
     Returns:
         Principal if valid credentials are provided, or None if unauthenticated.
@@ -65,7 +80,20 @@ def authenticate_principal(
     if not token:
         return None
 
-    if token in DEFAULT_PRINCIPAL_TOKENS:
-        return DEFAULT_PRINCIPAL_TOKENS[token]
+    # 1. Match against explicitly configured operator tokens from settings/environment
+    if settings.operator_api_tokens:
+        for idx, op_token in enumerate(settings.operator_api_tokens):
+            if token == op_token:
+                return Principal(identity=f"operator_env_{idx+1}", role=PrincipalRole.OPERATOR)
+
+    # 2. In production, fail-closed: NEVER accept hardcoded test/dev fallback credentials
+    if settings.environment.lower() == "production":
+        if token in TEST_DEV_PRINCIPAL_TOKENS:
+            logger.warning("Rejected test/dev token attempt against production environment: test tokens are forbidden.")
+        return None
+
+    # 3. In development / test environments, accept test/dev credentials
+    if token in TEST_DEV_PRINCIPAL_TOKENS:
+        return TEST_DEV_PRINCIPAL_TOKENS[token]
 
     return None

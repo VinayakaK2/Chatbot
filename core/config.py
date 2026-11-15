@@ -36,6 +36,13 @@ class Settings(BaseSettings):
         description="Allowed CORS origins for the frontend GUI",
     )
 
+    # Operator Security & Authentication Tokens (Phase 8)
+    operator_api_tokens: List[str] = Field(
+        default_factory=list,
+        validation_alias="OPERATOR_API_TOKENS",
+        description="Secret operator bearer tokens for privileged API actions in production",
+    )
+
     # Model Provider Settings (Colab vLLM / OpenAI-compatible endpoint)
     agent_model_base_url: Optional[str] = Field(
         default=None,
@@ -165,6 +172,27 @@ class Settings(BaseSettings):
         description="Enable Write-Ahead Logging (WAL) mode for concurrent access",
     )
 
+    @field_validator("operator_api_tokens", mode="before")
+    @classmethod
+    def parse_operator_tokens(cls, v: Any) -> List[str]:
+        """Parse operator API tokens from comma-separated string, JSON list, or list."""
+        if isinstance(v, str):
+            clean = v.strip()
+            if not clean:
+                return []
+            if clean.startswith("[") and clean.endswith("]"):
+                import json
+                try:
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [t.strip() for t in clean.split(",") if t.strip()]
+        if isinstance(v, (list, tuple, set)):
+            return [str(t).strip() for t in v if str(t).strip()]
+        return []
+
     @field_validator("port")
     @classmethod
     def validate_port_range(cls, v: int) -> int:
@@ -283,6 +311,7 @@ class Settings(BaseSettings):
             "context_reserve_output_tokens": self.context_reserve_output_tokens,
             "context_safety_margin_tokens": self.context_safety_margin_tokens,
             "context_max_tool_output_tokens": self.context_max_tool_output_tokens,
+            "operator_tokens_configured": len(self.operator_api_tokens),
         }
 
 

@@ -887,13 +887,14 @@ Make failures understandable, bounded, and recoverable, and ensure completion cl
     - Exit code capture, SQLite persistence with provenance tracking (`origin`, `profile_name`, `authorized_by`).
   - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify`, `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
     - Profile resolution assigns `origin = "configured_profile"` and `authorized_by = "system_policy"`.
-    - Custom command execution enforces role-based access control: unauthenticated callers receive HTTP 401 Unauthorized; authenticated non-operators receive HTTP 403 Forbidden; authenticated operators execute with provenance deterministically set to `authorized_by = principal.identity` and `origin = "operator"`. Untrusted callers cannot manufacture operator provenance.
+    - Custom command execution enforces role-based access control: unauthenticated callers receive HTTP 401 Unauthorized; authenticated non-operators receive HTTP 403 Forbidden; authenticated operators execute with provenance deterministically set to `authorized_by = principal.identity` and `origin = "operator"`.
+    - Production Security Invariant: in production (`environment="production"`), hardcoded test tokens (`op-secret-token-3891`, `dev-operator-token`) are strictly forbidden and rejected with HTTP 401 Unauthorized; operator tokens must be explicitly configured via `OPERATOR_API_TOKENS` environment variable (fail closed).
   - `core/diagnostics.py`: `mask_secret` safe credential display (`sk-***...***5de (len=34)`), shallow model connectivity probe, SQLite database health check (PRAGMA integrity_check, WAL mode, migration versions), CLI entry point `chatbot-diagnostics`.
   - `storage/migrations.py`: Migration 003 (`003_reliability_observability_verification`) creating `verification_records` and `runtime_events` tables with performance indexes and adding correlation, provenance, and retry columns to `tasks`, `tool_executions`, `verification_records`, and `model_calls`.
   - `tools/security.py`: Defense-in-depth secret sanitization covering AWS keys, JWTs, URLs with embedded passwords, private keys, and recursive object scrubbing (`redact_secrets_obj`).
 - **Verification Evidence:**
-  - 43 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
-  - 563/564 backend tests passed (1 skipped Windows symlink test in `tests/test_workspace_security.py:122`; `tests/test_smoke_live.py` ignored for offline runs) with zero regressions across Phases 0–7.
+  - 44 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+  - 564/565 backend tests passed (1 skipped Windows symlink test in `tests/test_workspace_security.py:122`; `tests/test_smoke_live.py` ignored for offline runs) with zero regressions across Phases 0–7.
   - 59/59 frontend vitest tests passed across 10 test files.
   - Frontend production build (`tsc -b && vite build`) passed cleanly.
 - **Dossier & Documentation:**

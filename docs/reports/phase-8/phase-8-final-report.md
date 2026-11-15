@@ -19,6 +19,7 @@ Phase 8 is complete. Following rigorous engineering critique addressing findings
 7. **Verification Trust Boundary & Operator Role Authorization (F8-01, Conditions 1–4):**
    - Pre-approved profiles (`get_default_verification_profiles`) dynamically anchored to `sys.executable` (preventing relative path/binary hijacking) with `origin = "configured_profile"` and `authorized_by = "system_policy"`.
    - Custom commands protected by principal authentication (`core/auth.py`): unauthenticated callers receive `HTTP 401 Unauthorized` (Condition 1); authenticated non-operators receive `HTTP 403 Forbidden` (Condition 2); authenticated operators execute with provenance deterministically bound to `authorized_by = principal.identity` and `origin = "operator"` (Condition 3).
+   - In production (`environment="production"`), hardcoded test/dev credentials (`op-secret-token-3891`, `dev-operator-token`) are strictly forbidden and return `HTTP 401 Unauthorized`. Operator credentials in production must be explicitly configured via `OPERATOR_API_TOKENS` environment setting (fail closed).
    - Rejection of trivial self-certification commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`), with clean environment allowlists (`_build_safe_env`).
 8. **Capture-Time Streaming Memory Bound (F8-02, Condition 5):** Subprocess output consumed in 4KB chunks via `BoundedStreamCapture` (32KB head + 32KB circular deque tail), capping capture-time memory at `<= 64KB` in RAM regardless of stream size.
 9. **Multi-Level Process Tree Termination (F8-04, Condition 5):** Cross-platform termination (`taskkill /F /T` on Windows / `os.killpg(os.getpgid(pid), signal.SIGKILL)` on POSIX) terminating both child and grandchild subprocesses on timeout or cancellation, verified empirically.
@@ -68,16 +69,16 @@ flowchart TD
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `tests/test_retries.py` (Work Item 4, Retry-After cap, Backoff cancel) | 11 | 11 | 0 | 0 | **PASS** |
 | `tests/test_loop_detector.py` (Work Item 6, Canonical hashing) | 5 | 5 | 0 | 0 | **PASS** |
-| `tests/test_verification.py` (Work Items 7 & 8, F8-01, F8-02, F8-04, Auth) | 12 | 12 | 0 | 0 | **PASS** |
+| `tests/test_verification.py` (Work Items 7 & 8, F8-01, F8-02, F8-04, Auth) | 13 | 13 | 0 | 0 | **PASS** |
 | `tests/test_observability.py` (Work Items 1, 2, 9, F8-03, Pagination) | 8 | 8 | 0 | 0 | **PASS** |
 | `tests/test_cancellation_shutdown.py` (Work Items 3 & 5, Graceful shutdown) | 3 | 3 | 0 | 0 | **PASS** |
 | `tests/test_diagnostics.py` (Work Item 10, Secret masking) | 4 | 4 | 0 | 0 | **PASS** |
-| **Total Dedicated Phase 8 Tests** | **43** | **43** | **0** | **0** | **PASS** |
-| **Full Repository Regression Suite** | **564** | **563** | **0** | **1\*** | **PASS** |
+| **Total Dedicated Phase 8 Tests** | **44** | **44** | **0** | **0** | **PASS** |
+| **Full Repository Regression Suite** | **565** | **564** | **0** | **1\*** | **PASS** |
 | **Frontend Test Suite (Vitest)** | **59** | **59** | **0** | **0** | **PASS** |
 | **Frontend Production Build (`tsc -b && vite build`)** | **1** | **1** | **0** | **0** | **PASS** |
 
-*\*Note on test policies: (1) `tests/test_smoke_live.py` (2 live tests) is explicitly ignored via `--ignore=tests/test_smoke_live.py` as it requires live GPU tunnel connectivity to an external Colab vLLM server. (2) Exactly 1 test within the 564 collected offline suite (`tests/test_workspace_security.py:122`) is skipped on Windows when run without elevated `SeCreateSymbolicLinkPrivilege`.*
+*\*Note on test policies: (1) `tests/test_smoke_live.py` (2 live tests) is explicitly ignored via `--ignore=tests/test_smoke_live.py` as it requires live GPU tunnel connectivity to an external Colab vLLM server. (2) Exactly 1 test within the 565 collected offline suite (`tests/test_workspace_security.py:122`) is skipped on Windows when run without elevated `SeCreateSymbolicLinkPrivilege`.*
 
 ---
 

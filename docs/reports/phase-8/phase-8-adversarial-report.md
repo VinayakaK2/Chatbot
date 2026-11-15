@@ -75,14 +75,16 @@ Phase 8 introduces active runtime controls defending against model deception, ru
 - **Simulation:**
   - Case 1 (Condition 1 - Unauthenticated Caller): Client attempts custom command execution (`command="python -m pytest tests/test_diagnostics.py"`) with header `X-Operator-Authorization: true` but omitting authentication token.
   - Case 2 (Condition 2 - Authenticated Non-Operator): Client provides valid viewer token `viewer-token-9912` (`PrincipalRole.VIEWER`) attempting custom verification command.
-  - Case 3 (Condition 3 - Authenticated Operator): Client provides valid operator token `op-secret-token-3891` (`PrincipalRole.OPERATOR`) attempting custom verification command with caller-supplied body `{"origin": "system", "authorized_by": "root"}`.
+  - Case 3 (Condition 3 - Authenticated Operator): Client provides valid operator token `op-secret-token-3891` (`PrincipalRole.OPERATOR`) in development/test environment attempting custom verification command with caller-supplied body `{"origin": "system", "authorized_by": "root"}`.
   - Case 4 (Condition 4 - Configured Profile Resolution): Client triggers profile `profile_name="test_quick"` without auth headers.
+  - Case 5 (Production Environment Test Token Rejection): Client attempts to use hardcoded test tokens `op-secret-token-3891` or `dev-operator-token` in `environment="production"`.
 - **Observation:**
   - Case 1: Fast return of `HTTP 401 Unauthorized` with detail `"Authentication required to execute custom verification commands"`. Supply of `X-Operator-Authorization: true` alone is safely rejected.
   - Case 2: Fast return of `HTTP 403 Forbidden` with detail `"Forbidden: operator role required to execute custom verification commands (principal 'guest_viewer' has role 'viewer')"`.
   - Case 3: Returns `HTTP 201 Created`. In SQLite `verification_records`, the runtime binds `origin = "operator"` and `authorized_by = "operator_admin"`, ignoring spoofed payload fields.
   - Case 4: Returns `HTTP 201 Created`. Resolves via trusted `get_default_verification_profiles()` anchored to `sys.executable`, binding `origin = "configured_profile"` and `authorized_by = "system_policy"`.
-- **Result:** Defended. All 4 authorization and resolution conditions strictly verified.
+  - Case 5: Returns `HTTP 401 Unauthorized`. In production, test/dev credentials are strictly rejected (fail closed); only tokens explicitly configured via `OPERATOR_API_TOKENS` are accepted.
+- **Result:** Defended. All authorization and production security boundaries strictly verified.
 
 ---
 

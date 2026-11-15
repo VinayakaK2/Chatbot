@@ -9,6 +9,7 @@ import re
 import stat
 import tempfile
 import threading
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from core.tool_contracts import ToolError
@@ -445,8 +446,16 @@ class WorkspaceContext:
                     f.flush()
                     os.fsync(f.fileno())
 
-                # Atomic swap
-                os.replace(temp_path, target)
+                # Atomic swap with brief retry on Windows for transient sharing violations
+                max_attempts = 5 if os.name == "nt" else 1
+                for attempt in range(max_attempts):
+                    try:
+                        os.replace(temp_path, target)
+                        break
+                    except (PermissionError, OSError) as replace_err:
+                        if attempt == max_attempts - 1:
+                            raise
+                        time.sleep(0.01 * (attempt + 1))
                 lines_count = len(content.splitlines())
                 return len(encoded_bytes), lines_count
             except OSError as exc:

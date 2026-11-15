@@ -68,7 +68,8 @@ Under this architecture:
   - `core/auth.py` implements role-based security: `PrincipalRole` (`OPERATOR`, `VIEWER`, `AGENT`) and `authenticate_principal` parsing `Authorization: Bearer <token>` and `X-API-Key: <token>`.
   - **Condition 1 (Unauthenticated callers):** Requests with no authorization headers or invalid tokens receive `HTTP 401 Unauthorized`. Even if an attacker supplies `X-Operator-Authorization: true`, the absence of a valid operator token results in HTTP 401.
   - **Condition 2 (Authenticated non-operators):** Authenticated callers holding viewer or agent tokens (e.g. `viewer-token-9912`) receive `HTTP 403 Forbidden` (`"operator role required to execute custom verification commands"`).
-  - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens (e.g. `op-secret-token-3891`, `dev-operator-token`) receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+  - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+  - **Production Security Invariant:** In production (`environment="production"`), hardcoded test tokens (`op-secret-token-3891`, `dev-operator-token`) are strictly forbidden and return `HTTP 401 Unauthorized`. Operator credentials in production must be explicitly configured via `OPERATOR_API_TOKENS` environment setting (fail closed).
   - **Condition 4 (Trusted Profile Resolution):** `get_default_verification_profiles()` dynamically anchors Python test profiles to `sys.executable` (e.g. `f'"{sys.executable}" -m pytest --ignore=tests/test_smoke_live.py'`) and `npm` via `shutil.which("npm")`, guaranteeing execution strictly under the virtual environment interpreter and preventing ambient PATH or relative binary hijacking.
   - **Self-Certification Prevention:** `validate_verification_command` rejects trivial pass commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`, `|`).
   - **Environment Hygiene:** Subprocesses run with a sanitized environment allowlist `_build_safe_env`, withholding host secrets from child processes.
@@ -100,8 +101,8 @@ Under this architecture:
 ## 5. Auditor Conclusion & Recommendation
 
 The auditor directly inspected the actual repository source code files, database schema DDL, and terminal command outputs:
-- All 43 dedicated Phase 8 tests pass (100%) across 6 test files (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
-- The full backend test suite collects 564 tests: 563 pass, 0 fail, and exactly 1 test (`tests/test_workspace_security.py:122`) is skipped due to Windows symlink privilege requirements.
+- All 44 dedicated Phase 8 tests pass (100%) across 6 test files (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+- The full backend test suite collects 565 tests: 564 pass, 0 fail, and exactly 1 test (`tests/test_workspace_security.py:122`) is skipped due to Windows symlink privilege requirements.
 - `tests/test_smoke_live.py` (2 live tests) is explicitly excluded via `--ignore=tests/test_smoke_live.py` per project policy as it requires active external GPU Colab vLLM server availability.
 - All 59 frontend vitest tests pass across 10 test files.
 - The production frontend build compiles cleanly.

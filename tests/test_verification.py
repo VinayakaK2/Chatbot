@@ -213,9 +213,9 @@ def test_api_verification_security_authorization_matrix(temp_db: DatabaseManager
     app = create_app()
     client = TestClient(app)
 
-    create_resp = client.post("/api/tasks", json={"prompt": "Task for security matrix check"})
-    assert create_resp.status_code == 201
-    task_id = create_resp.json()["task_id"]
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Task for security matrix check")
+    task_id = task.id
 
     # Condition 1: Unauthenticated caller cannot execute custom verification command, even when supplying headers
     unauth_resp = client.post(
@@ -281,6 +281,56 @@ def test_api_verification_security_authorization_matrix(temp_db: DatabaseManager
     assert sys.executable in default_test_cmd
     assert "-m pytest" in default_test_cmd
     assert "--ignore=tests/test_smoke_live.py" in default_test_cmd
+
+
+def test_api_verification_production_environment_rejects_test_tokens_and_requires_env_tokens(
+    temp_db: DatabaseManager,
+) -> None:
+    """Verify production security invariant: hardcoded test tokens are forbidden; only OPERATOR_API_TOKENS are accepted."""
+    from core.task_service import set_task_service
+    from core.config import Settings
+
+    prod_settings = Settings(
+        environment="production",
+        operator_api_tokens=["prod-secure-token-9988"],
+    )
+    task_service = TaskService(database_manager=temp_db, auto_run_recovery=False, settings=prod_settings)
+    set_task_service(task_service)
+    app = create_app(settings=prod_settings)
+    client = TestClient(app)
+
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Production security check")
+    task_id = task.id
+
+    # 1. Hardcoded test token MUST be rejected with 401 in production
+    test_token_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={"command": "python -c \"print('FAIL')\""},
+        headers={"Authorization": "Bearer op-secret-token-3891"},
+    )
+    assert test_token_resp.status_code == 401
+    assert "Authentication required" in test_token_resp.json()["detail"]
+
+    # 2. Hardcoded dev-operator-token MUST also be rejected with 401 in production
+    dev_token_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={"command": "python -c \"print('FAIL')\""},
+        headers={"Authorization": "Bearer dev-operator-token"},
+    )
+    assert dev_token_resp.status_code == 401
+
+    # 3. Explicitly configured production token MUST be accepted with 201
+    prod_token_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={"command": "python -c \"print('PROD_AUTHORIZED')\""},
+        headers={"Authorization": "Bearer prod-secure-token-9988"},
+    )
+    assert prod_token_resp.status_code == 201
+    data = prod_token_resp.json()
+    assert data["origin"] == "operator"
+    assert data["authorized_by"] == "operator_env_1"
+    assert "PROD_AUTHORIZED" in (data["output_excerpt"] or "")
 
 
 def test_verification_rejects_trivial_and_unsafe_commands() -> None:

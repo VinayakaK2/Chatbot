@@ -86,7 +86,8 @@ All 10 work items have been fully implemented, verified across unit and integrat
     - FastAPI dependency `authenticate_principal` extracts tokens from `Authorization: Bearer <token>` or `X-API-Key: <token>`.
     - **Condition 1 (Unauthenticated callers):** Requests with no authorization headers or invalid tokens receive `HTTP 401 Unauthorized`. Even if an attacker supplies `X-Operator-Authorization: true`, the absence of a valid operator token results in HTTP 401.
     - **Condition 2 (Authenticated non-operators):** Authenticated callers holding viewer or agent tokens (e.g. `viewer-token-9912`) receive `HTTP 403 Forbidden` (`"operator role required to execute custom verification commands"`).
-    - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens (e.g. `op-secret-token-3891`, `dev-operator-token`) receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+    - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+    - **Production Security Invariant:** In production (`environment="production"`), hardcoded test/dev credentials (`op-secret-token-3891`, `dev-operator-token`) are strictly forbidden and rejected with `HTTP 401 Unauthorized` (fail closed). Operators in production must configure explicit tokens via the `OPERATOR_API_TOKENS` environment variable / configuration setting (`core/config.py`).
   - **Trusted Profile Resolution (Condition 4):**
     - `get_default_verification_profiles()` resolves profiles dynamically to trusted interpreter paths under the active virtual environment: `"test"` resolves to `f'"{sys.executable}" -m pytest --ignore=tests/test_smoke_live.py'`, preventing relative executable hijacking, PATH pollution, or cwd script shadowing.
     - Profile runs automatically assign `origin = "configured_profile"` and `authorized_by = "system_policy"`.
@@ -172,15 +173,15 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 
 ## 4. Test Suite Execution Summary
 
-- **Phase 8 Dedicated Tests:** 43 tests passed (100%)
+- **Phase 8 Dedicated Tests:** 44 tests passed (100%)
   - `tests/test_retries.py`: 11/11 passed (includes `Retry-After` clamping and backoff cancellation)
   - `tests/test_loop_detector.py`: 5/5 passed (consecutive and ping-pong loop detection)
-  - `tests/test_verification.py`: 12/12 passed (includes trust boundary, operator authorization header enforcement, profile resolution, 10MB streaming capture, process tree kill, and cancellation)
+  - `tests/test_verification.py`: 13/13 passed (includes trust boundary, operator authorization header enforcement, production environment token rejection, profile resolution, 10MB streaming capture, process tree kill, and cancellation)
   - `tests/test_observability.py`: 8/8 passed (includes strict correlation ID validation, nested secret scrubbing, and event pagination)
   - `tests/test_cancellation_shutdown.py`: 3/3 passed (task cancellation, late cancellation rejection, graceful shutdown)
   - `tests/test_diagnostics.py`: 4/4 passed (secret masking, full diagnostics probe)
-- **Full Backend Regression Suite:** 564 collected, 563 passed, 1 skipped (0 failures)
+- **Full Backend Regression Suite:** 565 collected, 564 passed, 1 skipped (0 failures)
   - *Ignore Policy:* `tests/test_smoke_live.py` (2 tests) is explicitly ignored via `--ignore=tests/test_smoke_live.py` as it requires live GPU tunnel connectivity to an external Colab vLLM server.
-  - *Skip Policy:* Exactly 1 test within the 564 collected suite (`tests/test_workspace_security.py:122: test_symlink_traversal_prevention`) is skipped on Windows when run without elevated `SeCreateSymbolicLinkPrivilege`. Zero tests failed.
+  - *Skip Policy:* Exactly 1 test within the 565 collected suite (`tests/test_workspace_security.py:122: test_symlink_traversal_prevention`) is skipped on Windows when run without elevated `SeCreateSymbolicLinkPrivilege`. Zero tests failed.
 - **Frontend Test Suite:** 10 test files, 59 tests passed (0 failures)
 - **Frontend Production Build:** `tsc -b && vite build` succeeded cleanly in 4.99s.
