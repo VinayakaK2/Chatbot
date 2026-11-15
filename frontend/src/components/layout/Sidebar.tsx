@@ -4,15 +4,14 @@
  * context actions (rename, delete), and smooth collapse.
  */
 
-import React, { useState } from 'react'
+import React, { useState, useMemo, useRef, useEffect } from 'react'
 import type { Conversation, Project, HealthResponse, ModelReadinessResponse, WorkspaceInfo } from '../../types/api'
 import {
   IconArchive,
   IconBot,
-  IconBriefcase,
+  IconCheck,
   IconChevronDown,
   IconChevronRight,
-  IconClock,
   IconEdit,
   IconFilter,
   IconFolder,
@@ -220,9 +219,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [sortBy, setSortBy] = useState<'updated' | 'name' | 'created'>(() => {
+    try {
+      const saved = localStorage.getItem('agent_conversations_sort_by')
+      if (saved === 'name' || saved === 'created' || saved === 'updated') {
+        return saved
+      }
+    } catch {
+      // Ignore localStorage read failures
+    }
+    return 'updated'
+  })
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false)
+  const filterMenuRef = useRef<HTMLDivElement>(null)
+
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({
     default: true,
+    'workspace-root-project': true,
   })
+
+  // Close filter dropdown on outside click
+  useEffect(() => {
+    if (!isFilterMenuOpen) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filterMenuRef.current && !filterMenuRef.current.contains(e.target as Node)) {
+        setIsFilterMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [isFilterMenuOpen])
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) => ({
@@ -231,13 +257,61 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }))
   }
 
-  // Filter conversations by search query
-  const filteredConversations = conversations.filter((c) =>
-    c.title.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Display projects: explicitly filter out 'Agent Runtime Core' / 'proj-default'
+  const displayProjects = useMemo(() => {
+    const valid = projects.filter(
+      (p) => p.name !== 'Agent Runtime Core' && p.id !== 'proj-default'
+    )
+    if (valid.length > 0) return valid
+    if (currentWorkspace?.name) {
+      return [
+        {
+          id: 'workspace-root-project',
+          name: currentWorkspace.name,
+          created_at: new Date().toISOString(),
+        },
+      ]
+    }
+    return []
+  }, [projects, currentWorkspace])
 
-  const pinnedConversations = filteredConversations.filter((c) => c.pinned && !c.archived)
-  const unpinnedConversations = filteredConversations.filter((c) => !c.pinned && !c.archived)
+  // Sort conversations dynamically based on user selection
+  const sortedConversations = useMemo(() => {
+    return [...conversations].sort((a, b) => {
+      if (sortBy === 'name') {
+        return (a.title || '').localeCompare(b.title || '')
+      }
+      if (sortBy === 'created') {
+        const tA = new Date(a.created_at).getTime()
+        const tB = new Date(b.created_at).getTime()
+        return tB - tA
+      }
+      // Default: 'updated'
+      const tA = new Date(a.updated_at || a.created_at).getTime()
+      const tB = new Date(b.updated_at || b.created_at).getTime()
+      return tB - tA
+    })
+  }, [conversations, sortBy])
+
+  // Filter conversations by search query
+  const filteredConversations = useMemo(() => {
+    if (!searchQuery.trim()) return sortedConversations
+    const q = searchQuery.toLowerCase()
+    return sortedConversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        c.messages.some((m) => m.content.toLowerCase().includes(q))
+    )
+  }, [sortedConversations, searchQuery])
+
+  const pinnedConversations = useMemo(
+    () => filteredConversations.filter((c) => c.pinned && !c.archived),
+    [filteredConversations]
+  )
+  const unpinnedConversations = useMemo(
+    () => filteredConversations.filter((c) => !c.pinned && !c.archived),
+    [filteredConversations]
+  )
 
   if (isCollapsed) {
     return null
@@ -308,28 +382,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Navigation Links: Automations & Customizations (Image reference) */}
-      <div className="sidebar-nav-list">
-        <button
-          type="button"
-          className="sidebar-nav-item"
-          onClick={onOpenSettings}
-          title="Automations"
-        >
-          <IconClock size={15} />
-          <span>Automations</span>
-        </button>
-        <button
-          type="button"
-          className="sidebar-nav-item"
-          onClick={onOpenSettings}
-          title="Customizations"
-        >
-          <IconBriefcase size={15} />
-          <span>Customizations</span>
-        </button>
-      </div>
-
       {/* Search Field (Only shown when search icon is clicked) */}
       {isSearchOpen && (
         <div className="sidebar-search-box is-active">
@@ -359,20 +411,99 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Scrollable Conversation History & Projects */}
       <div className="sidebar-scroll-area">
         {/* Projects Folders Section */}
-        {projects.length > 0 && (
+        {displayProjects.length > 0 && (
           <div className="sidebar-section">
             <div className="sidebar-section-header-row">
               <span className="sidebar-section-title">Projects</span>
               <div className="sidebar-section-actions">
-                <button
-                  type="button"
-                  className="sidebar-section-icon-btn"
-                  onClick={() => setIsSearchOpen((prev) => !prev)}
-                  title="Filter / Search conversations"
-                  aria-label="Filter conversations"
-                >
-                  <IconFilter size={13} />
-                </button>
+                <div className="sidebar-filter-dropdown-wrap" ref={filterMenuRef}>
+                  <button
+                    type="button"
+                    className={`sidebar-section-icon-btn ${isFilterMenuOpen ? 'is-active' : ''}`}
+                    onClick={() => setIsFilterMenuOpen((prev) => !prev)}
+                    title="Filter and sort conversations"
+                    aria-label="Filter conversations"
+                    aria-expanded={isFilterMenuOpen}
+                  >
+                    <IconFilter size={13} />
+                  </button>
+
+                  {isFilterMenuOpen && (
+                    <div className="sidebar-filter-menu" role="menu" aria-label="Sort and filter options">
+                      <button
+                        type="button"
+                        className={`sidebar-filter-item ${sortBy === 'updated' ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setSortBy('updated')
+                          try {
+                            localStorage.setItem('agent_conversations_sort_by', 'updated')
+                          } catch {
+                            // Ignore localStorage write failures
+                          }
+                          setIsFilterMenuOpen(false)
+                        }}
+                        role="menuitem"
+                      >
+                        <span>Last Updated</span>
+                        {sortBy === 'updated' && <IconCheck size={12} color="var(--color-file-text, #60a5fa)" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`sidebar-filter-item ${sortBy === 'name' ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setSortBy('name')
+                          try {
+                            localStorage.setItem('agent_conversations_sort_by', 'name')
+                          } catch {
+                            // Ignore localStorage write failures
+                          }
+                          setIsFilterMenuOpen(false)
+                        }}
+                        role="menuitem"
+                      >
+                        <span>Sort by Name</span>
+                        {sortBy === 'name' && <IconCheck size={12} color="var(--color-file-text, #60a5fa)" />}
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`sidebar-filter-item ${sortBy === 'created' ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setSortBy('created')
+                          try {
+                            localStorage.setItem('agent_conversations_sort_by', 'created')
+                          } catch {
+                            // Ignore localStorage write failures
+                          }
+                          setIsFilterMenuOpen(false)
+                        }}
+                        role="menuitem"
+                      >
+                        <span>Date Created</span>
+                        {sortBy === 'created' && <IconCheck size={12} color="var(--color-file-text, #60a5fa)" />}
+                      </button>
+
+                      <div className="sidebar-filter-divider" />
+
+                      <button
+                        type="button"
+                        className="sidebar-filter-item"
+                        onClick={() => {
+                          setIsSearchOpen(true)
+                          setIsFilterMenuOpen(false)
+                        }}
+                        role="menuitem"
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <IconSearch size={12} />
+                          <span>Search Text...</span>
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {onOpenWorkspaceSelector && (
                   <button
                     type="button"
@@ -386,10 +517,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
               </div>
             </div>
-            {projects.map((proj) => {
+            {displayProjects.map((proj) => {
               const isExpanded = !!expandedProjects[proj.id]
               const projectChats = filteredConversations.filter(
-                (c) => c.project_id === proj.id
+                (c) =>
+                  c.project_id === proj.id ||
+                  (proj.id === 'workspace-root-project' &&
+                    (!c.project_id || c.project_id === 'proj-default' || c.project_id === 'workspace-root-project'))
               )
 
               return (

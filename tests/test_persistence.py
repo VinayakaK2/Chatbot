@@ -394,31 +394,49 @@ def test_database_level_trigger_terminal_immutability(temp_db: DatabaseManager) 
 
     # 2. Direct raw SQL update attempting to reactivate completed task to EXECUTING
     with temp_db.connection() as conn:
-        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
             conn.execute(
                 "UPDATE tasks SET status = 'executing' WHERE id = ?;",
                 (task.id,),
             )
 
-    # Verify task status in database was NOT changed
+    # 3. Direct raw SQL update attempting to tamper with OTHER columns of a terminal task (Full-row immutability)
     with temp_db.connection() as conn:
-        row = conn.execute("SELECT status FROM tasks WHERE id = ?;", (task.id,)).fetchone()
-        assert row["status"] == "completed"
+        for col_update in [
+            "UPDATE tasks SET prompt = 'Tampered prompt' WHERE id = ?;",
+            "UPDATE tasks SET response_text = 'Tampered response' WHERE id = ?;",
+            "UPDATE tasks SET error = 'Tampered error' WHERE id = ?;",
+            "UPDATE tasks SET termination_reason = 'tampered' WHERE id = ?;",
+            "UPDATE tasks SET recovery_status = 'clean' WHERE id = ?;",
+        ]:
+            with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
+                conn.execute(col_update, (task.id,))
 
-    # 3. Create another task and set to terminal FAILED
+    # Verify task status and columns in database were NOT changed
+    with temp_db.connection() as conn:
+        row = conn.execute("SELECT status, prompt FROM tasks WHERE id = ?;", (task.id,)).fetchone()
+        assert row["status"] == "completed"
+        assert row["prompt"] == "Trigger immutability test"
+
+    # 4. Create another task and set to terminal FAILED
     task2 = task_repo.create_task(prompt="Trigger fail test", session_id=session.id)
     task_repo.transition_task_state(task2.id, to_status="EXECUTING", expected_version=1)
     task_repo.transition_task_state(task2.id, to_status="FAILED", expected_version=2)
 
-    # Direct raw SQL update attempting to set failed task back to PENDING
+    # Direct raw SQL update attempting to set failed task back to PENDING or modify error
     with temp_db.connection() as conn:
-        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
             conn.execute(
                 "UPDATE tasks SET status = 'pending' WHERE id = ?;",
                 (task2.id,),
             )
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
+            conn.execute(
+                "UPDATE tasks SET error = 'Rewritten error' WHERE id = ?;",
+                (task2.id,),
+            )
 
-    # 4. Direct raw SQL update attempting illegal pending -> completed jump
+    # 5. Direct raw SQL update attempting illegal pending -> completed jump
     task3 = task_repo.create_task(prompt="Trigger jump test", session_id=session.id)
     with temp_db.connection() as conn:
         with pytest.raises(sqlite3.IntegrityError, match="Illegal database state transition: pending tasks"):
@@ -483,7 +501,7 @@ def test_migration_upgrade_v1_to_v2_preserves_data(tmp_path: Path) -> None:
         assert task_row["parent_task_id"] is None
 
         # 5. Verify triggers are active on the upgraded database
-        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are completely immutable"):
             conn.execute("UPDATE tasks SET status = 'executing' WHERE id = 't-legacy';")
 
     manager.close()

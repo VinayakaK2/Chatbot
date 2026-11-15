@@ -142,15 +142,18 @@ MIGRATIONS: List[Tuple[int, str, str]] = [
         """
         -- Add parent_task_id to tasks for linked continuation tasks across recovery
         ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
-        CREATE INDEX IF NOT EXISTS idx_tasks_parent_task ON tasks(parent_task_id);
+        
+        -- Unique partial index enforcing AT MOST ONE continuation task per parent task at the database engine level
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;
 
-        -- Database-level trigger: Abort status updates on terminal tasks
-        CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_status_update
-        BEFORE UPDATE OF status ON tasks
+        -- Database-level trigger: Abort ANY column update on terminal tasks (full-row immutability)
+        DROP TRIGGER IF EXISTS trg_prevent_terminal_task_status_update;
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_update
+        BEFORE UPDATE ON tasks
         FOR EACH ROW
         WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')
         BEGIN
-            SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable and cannot be updated');
+            SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable');
         END;
 
         -- Database-level trigger: Abort illegal transitions from pending

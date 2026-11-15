@@ -663,6 +663,22 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
                   type="button"
                   className="file-more-dropdown-item"
                   onClick={() => {
+                    handleToggleFitToScreen()
+                    setIsMoreMenuOpen(false)
+                  }}
+                  role="menuitem"
+                >
+                  <IconMaximize size={13} />
+                  <span className="file-more-item-label">
+                    {isFitToScreen ? 'Fit to Screen (Wrap: ON)' : 'Fit to Screen (Wrap: OFF)'}
+                  </span>
+                  {isFitToScreen && <IconCheck size={12} color="var(--color-file-text, #60a5fa)" />}
+                </button>
+
+                <button
+                  type="button"
+                  className="file-more-dropdown-item"
+                  onClick={() => {
                     handleReloadActiveFile()
                     setIsMoreMenuOpen(false)
                   }}
@@ -700,7 +716,7 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
       </div>
 
       {/* 3. Panel Body: Markdown Renderer OR CodeBlock OR DiffViewer */}
-      <div className="file-viewer-body">
+      <div className={`file-viewer-body ${isFitToScreen ? 'is-fit-to-screen' : ''}`}>
         {isLoadingFile ? (
           <div className="file-viewer-loading">
             <span className="inline-loader-spinner" />
@@ -723,10 +739,11 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
             <MarkdownRenderer content={activeTab.content} />
           </div>
         ) : (
-          <div className="file-viewer-raw-content">
+          <div className={`file-viewer-raw-content ${isFitToScreen ? 'is-fit-to-screen' : ''}`}>
             <CodeBlock
               code={activeTab?.content || ''}
               language={activeTab?.language || (activeTab?.type === 'markdown' ? 'markdown' : 'text')}
+              fitToScreen={isFitToScreen}
             />
           </div>
         )}

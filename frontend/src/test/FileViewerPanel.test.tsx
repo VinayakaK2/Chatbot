@@ -126,6 +126,32 @@ describe('FileViewerPanel Component', () => {
     expect(writeTextMock).toHaveBeenCalledWith(sampleTabs[0].content)
   })
 
+  it('toggles Fit to Screen mode via 3 dots menu', async () => {
+    await act(async () => {
+      render(
+        <FileViewerPanel
+          isOpen={true}
+          onClose={vi.fn()}
+          initialTabs={sampleTabs}
+          activeTabId="tab-2"
+        />
+      )
+    })
+
+    const moreBtn = screen.getByLabelText('More Options')
+    await act(async () => {
+      fireEvent.click(moreBtn)
+    })
+
+    // Fit to Screen option is present in 3 dots menu
+    const fitToScreenBtn = screen.getByText(/Fit to Screen/i)
+    expect(fitToScreenBtn).toBeDefined()
+
+    await act(async () => {
+      fireEvent.click(fitToScreenBtn)
+    })
+  })
+
   it('renders draggable resize handle and supports double-click reset and keyboard resizing', async () => {
     await act(async () => {
       render(

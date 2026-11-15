@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import logging
+import sqlite3
 from typing import List, Optional
 import uuid
 
@@ -227,11 +228,30 @@ class StartupRecoveryEngine:
             model=original.model,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
-        saved = self.task_repo.create(continuation)
-        logger.info(
-            "Created continuation task %s for interrupted task %s (session %s)",
-            continuation_id,
-            original_task_id,
-            original.session_id,
-        )
-        return saved
+
+        try:
+            saved = self.task_repo.create(continuation)
+            logger.info(
+                "Created continuation task %s for interrupted task %s (session %s)",
+                continuation_id,
+                original_task_id,
+                original.session_id,
+            )
+            return saved
+        except sqlite3.IntegrityError:
+            # Concurrency race: another thread committed a continuation task with this parent_task_id
+            cursor.execute(
+                "SELECT id FROM tasks WHERE parent_task_id = ? LIMIT 1;",
+                (original_task_id,),
+            )
+            winner = cursor.fetchone()
+            if winner:
+                winner_rec = self.task_repo.get(winner[0])
+                if winner_rec:
+                    logger.info(
+                        "Resolved concurrent continuation race for %s: returning winner task %s",
+                        original_task_id,
+                        winner[0],
+                    )
+                    return winner_rec
+            raise

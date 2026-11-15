@@ -592,16 +592,18 @@ def test_recovery_runtime_tool_registry_authoritative_classification(disk_db_pat
     db2.close()
 
 
-def test_recovery_all_five_approval_states_on_restart(disk_db_path: Path) -> None:
-    """Verify F7-06: Process restart behavior across all 5 approval lifecycle states.
+def test_recovery_all_six_approval_states_on_restart(disk_db_path: Path) -> None:
+    """Verify F7-06 & Issue 2: Process restart behavior across all 6 approval lifecycle states.
 
+    Schema states: pending, approved, denied, expired, cancelled, consumed.
     Per 2604.14228v3.pdf §5 and §9.2:
     - pending -> expired
     - approved (unconsumed) -> expired (authorizations do NOT survive process restart!)
     - consumed -> consumed (terminal, preserved)
     - denied -> denied (terminal, preserved)
     - expired -> expired (terminal, preserved)
-    - consume_token fails on authorizations that were invalidated to expired
+    - cancelled -> cancelled (terminal, preserved)
+    - consume_token fails on authorizations that were invalidated to expired or cancelled
     """
     db1 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
     MigrationRunner.apply_all(db1.get_connection())
@@ -632,6 +634,10 @@ def test_recovery_all_five_approval_states_on_restart(disk_db_path: Path) -> Non
     app_expired = approval_repo.create_request(task_id=task.id, action="cmd_expired", action_summary="Expired")
     approval_repo.resolve(call_id=app_expired.call_id, status=ApprovalStatus.EXPIRED, decision_reason="Timed out")
 
+    # 6. Cancelled approval
+    app_cancelled = approval_repo.create_request(task_id=task.id, action="cmd_cancelled", action_summary="Cancelled")
+    approval_repo.resolve(call_id=app_cancelled.call_id, status=ApprovalStatus.CANCELLED, decision_reason="Task cancelled by operator")
+
     db1.close()  # Sudden crash / restart
 
     # Process 2: boots and runs reconciliation
@@ -659,7 +665,79 @@ def test_recovery_all_five_approval_states_on_restart(disk_db_path: Path) -> Non
     # 5. Expired remains Expired
     assert approval_repo2.get_by_call_id(app_expired.call_id).status == ApprovalStatus.EXPIRED
 
+    # 6. Cancelled remains Cancelled
+    assert approval_repo2.get_by_call_id(app_cancelled.call_id).status == ApprovalStatus.CANCELLED
+
     # Verify consume_token on the previously approved (now expired) grant returns False
     assert approval_repo2.consume_token(app_approved.call_id) is False
+    # Verify consume_token on cancelled returns False
+    assert approval_repo2.consume_token(app_cancelled.call_id) is False
+
+    db2.close()
+
+
+def test_recovery_continuation_task_concurrent_race_prevention(disk_db_path: Path) -> None:
+    """Verify Issue 3: Concurrent simultaneous resume requests are protected by database unique constraint.
+
+    Spawns multiple concurrent threads attempting to call create_continuation_task on the exact same
+    interrupted task simultaneously. Verifies that exactly ONE continuation task is persisted, and
+    all concurrent callers receive the identical continuation task record.
+    """
+    import concurrent.futures
+
+    db1 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db1.get_connection())
+    session_repo = SessionRepository(db1)
+    task_repo = TaskRepository(db1)
+
+    session = session_repo.create_session(title="Concurrent Continuation Session")
+    original_task = task_repo.create_task(
+        prompt="Execute critical migration",
+        session_id=session.id,
+    )
+    task_repo.transition_task_state(original_task.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    db1.close()  # Sudden crash
+
+    # Process 2: Boots and reconciles
+    db2 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    recovery = StartupRecoveryEngine(db2)
+    summary = recovery.reconcile()
+    assert summary.safe_to_resume_count == 1
+
+    # Launch 10 concurrent threads simultaneously requesting continuation for original_task.id
+    results = []
+    errors = []
+
+    def request_continuation(thread_idx: int):
+        thread_db = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+        thread_recovery = StartupRecoveryEngine(thread_db)
+        try:
+            task_rec = thread_recovery.create_continuation_task(original_task.id)
+            return task_rec.id
+        finally:
+            thread_db.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(request_continuation, i) for i in range(10)]
+        for f in concurrent.futures.as_completed(futures):
+            try:
+                results.append(f.result())
+            except Exception as e:
+                errors.append(e)
+
+    assert len(errors) == 0, f"Concurrent resume raised unexpected errors: {errors}"
+    assert len(results) == 10
+
+    # All 10 concurrent callers must receive the EXACT SAME continuation task ID
+    unique_continuation_ids = set(results)
+    assert len(unique_continuation_ids) == 1, f"Duplicate continuation tasks created: {unique_continuation_ids}"
+
+    # Database verification: exactly ONE record exists with parent_task_id = original_task.id
+    with db2.connection() as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM tasks WHERE parent_task_id = ?;",
+            (original_task.id,),
+        ).fetchone()[0]
+        assert count == 1
 
     db2.close()

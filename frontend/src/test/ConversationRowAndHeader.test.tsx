@@ -158,6 +158,66 @@ describe('ConversationRow & Status Indicators', () => {
     // Now search input appears
     expect(screen.getByPlaceholderText(/Search conversations/i)).toBeDefined()
   })
+
+  it('does NOT render Agent Runtime Core or Automations/Customizations', () => {
+    render(
+      <Sidebar
+        conversations={mockConversations}
+        projects={[{ id: 'proj-default', name: 'Agent Runtime Core', created_at: new Date().toISOString() }]}
+        activeConversationId="c-1"
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        onTogglePinConversation={vi.fn()}
+        onOpenSettings={vi.fn()}
+        isCollapsed={false}
+        onToggleCollapse={vi.fn()}
+      />
+    )
+
+    // Agent Runtime Core must not be displayed
+    expect(screen.queryByText('Agent Runtime Core')).toBeNull()
+    // Automations and Customizations nav items must not be displayed
+    expect(screen.queryByText('Automations')).toBeNull()
+    expect(screen.queryByText('Customizations')).toBeNull()
+  })
+
+  it('opens filter and sort dropdown and allows switching sort order', () => {
+    render(
+      <Sidebar
+        conversations={mockConversations}
+        projects={[]}
+        currentWorkspace={{ name: 'chatbot', root_path: 'h:/chatbot' } as any}
+        activeConversationId="c-1"
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        onTogglePinConversation={vi.fn()}
+        onOpenSettings={vi.fn()}
+        isCollapsed={false}
+        onToggleCollapse={vi.fn()}
+      />
+    )
+
+    const filterBtn = screen.getByRole('button', { name: /Filter conversations/i })
+    expect(filterBtn).toBeDefined()
+
+    // Click filter button
+    fireEvent.click(filterBtn)
+
+    // Dropdown items appear
+    expect(screen.getByText('Last Updated')).toBeDefined()
+    expect(screen.getByText('Sort by Name')).toBeDefined()
+    expect(screen.getByText('Date Created')).toBeDefined()
+    expect(screen.getByText('Search Text...')).toBeDefined()
+
+    // Click Sort by Name
+    const sortByNameBtn = screen.getByText('Sort by Name')
+    fireEvent.click(sortByNameBtn)
+
+    // Menu closes after selection
+    expect(screen.queryByText('Date Created')).toBeNull()
+  })
 })
 
 describe('MessageItem Right/Left Alignment', () => {
