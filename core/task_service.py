@@ -41,6 +41,7 @@ from storage.repositories import (
     TranscriptRepository,
 )
 from tools.registry_setup import register_shell_tools, register_workspace_tools
+from tools.security import redact_secrets
 
 logger = logging.getLogger("agent_runtime.core.task_service")
 
@@ -133,7 +134,7 @@ class TaskService:
         self.approval_repo = ApprovalRepository(self.database_manager)
         self.approval_manager.approval_repo = self.approval_repo
         self.session_manager = session_manager or SessionManager(self.database_manager)
-        self.recovery_engine = StartupRecoveryEngine(self.database_manager)
+        self.recovery_engine = StartupRecoveryEngine(self.database_manager, tool_registry=self.tool_registry)
 
         # Automatic startup recovery reconciliation
         if auto_run_recovery:
@@ -375,13 +376,25 @@ class TaskService:
         event_type: RuntimeEventType,
         payload: Optional[Dict[str, Any]] = None,
     ) -> RuntimeEvent:
-        """Record and broadcast a structured lifecycle runtime event."""
+        """Record and broadcast a structured lifecycle runtime event with secret scrubbing."""
+        clean_payload: Dict[str, Any] = {}
+        if payload:
+            for k, v in payload.items():
+                if isinstance(v, str):
+                    clean_payload[k] = redact_secrets(v)
+                elif isinstance(v, dict):
+                    clean_payload[k] = {
+                        sub_k: redact_secrets(sub_v) if isinstance(sub_v, str) else sub_v
+                        for sub_k, sub_v in v.items()
+                    }
+                else:
+                    clean_payload[k] = v
         event = RuntimeEvent(
             event_id=str(uuid.uuid4()),
             task_id=task_id,
             event_type=event_type,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            payload=payload or {},
+            payload=clean_payload,
         )
         return self._broadcast_event(event)
 
@@ -556,6 +569,74 @@ class TaskService:
             return stored_task
 
         return await self._execute_with_loop(task_id, request, created_at, session_id=session_id)
+
+    async def resume_task(self, task_id: str) -> TaskResponse:
+        """Resume an interrupted task by creating and dispatching a linked continuation task.
+
+        Per F7-01:
+        1. Preserves original interrupted task as immutable terminal FAILED (interrupted_safe).
+        2. Spawns new PENDING continuation task linked via parent_task_id.
+        3. Begins execution via agent loop if configured, or queues for execution.
+        """
+        continuation_rec = self.recovery_engine.create_continuation_task(task_id)
+
+        with self._registry_lock:
+            if continuation_rec.id in self._tasks:
+                return self._tasks[continuation_rec.id]
+
+        req = TaskCreateRequest(
+            prompt=continuation_rec.prompt,
+            session_id=continuation_rec.session_id,
+            parent_task_id=continuation_rec.parent_task_id,
+        )
+        created_at = continuation_rec.created_at
+
+        self._record_event(
+            task_id=continuation_rec.id,
+            event_type=RuntimeEventType.TASK_CREATED,
+            payload={
+                "prompt": req.prompt,
+                "parent_task_id": continuation_rec.parent_task_id,
+                "resumed_from": task_id,
+            },
+        )
+
+        if self.model_provider is None or self.agent_loop is None:
+            task_resp = TaskResponse(
+                task_id=continuation_rec.id,
+                session_id=continuation_rec.session_id,
+                parent_task_id=continuation_rec.parent_task_id,
+                prompt=continuation_rec.prompt,
+                status=TaskStatus.PENDING,
+                recovery_status=RecoveryStatus.REPAIRED,
+                created_at=created_at,
+            )
+            with self._registry_lock:
+                self._tasks[continuation_rec.id] = task_resp
+            return task_resp
+
+        # Schedule execution in background
+        asyncio.create_task(
+            self._execute_with_loop(
+                continuation_rec.id,
+                req,
+                created_at,
+                session_id=continuation_rec.session_id,
+            )
+        )
+
+        task_resp = TaskResponse(
+            task_id=continuation_rec.id,
+            session_id=continuation_rec.session_id,
+            parent_task_id=continuation_rec.parent_task_id,
+            prompt=continuation_rec.prompt,
+            status=TaskStatus.PENDING,
+            recovery_status=RecoveryStatus.REPAIRED,
+            created_at=created_at,
+        )
+        with self._registry_lock:
+            self._tasks[continuation_rec.id] = task_resp
+        return task_resp
 
     async def _execute_with_loop(
         self,

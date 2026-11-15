@@ -135,17 +135,20 @@ flowchart TD
     Migrations --> Scan["StartupRecoveryEngine.reconcile()"]
     
     Scan --> FindExecuting["Query tasks WHERE status = 'executing'"]
-    Scan --> InvalidateApprovals["UPDATE approvals SET status = 'expired' WHERE status = 'pending'"]
+    Scan --> InvalidateApprovals["UPDATE approvals SET status = 'expired' WHERE status IN ('pending', 'approved')"]
     
-    FindExecuting --> CheckTools{"Inspect in-flight tool_executions for task"}
+    FindExecuting --> CheckTools{"Inspect in-flight tool_executions for task via ToolRegistry"}
     
-    CheckTools -->|Any in-flight is mutating / non-idempotent| NeedsReview["Classify: NEEDS_REVIEW<br/>(Task status set to FAILED,<br/>recovery_status = 'needs_review',<br/>reason = 'interrupted_mutating_tool')"]
-    CheckTools -->|Only read-only or zero in-flight tools| SafeResume["Classify: SAFE_TO_RESUME<br/>(recovery_status = 'interrupted_safe')"]
-    CheckTools -->|Pre-existing terminal state| Terminal["Classify: TERMINAL"]
+    CheckTools -->|Unknown tool OR mutating/non-idempotent tool| NeedsReview["Classify: NEEDS_REVIEW<br/>(Task status set to FAILED,<br/>recovery_status = 'needs_review',<br/>reason = 'interrupted_mutating_or_unknown_tool')<br/>Zero blind replay!"]
+    CheckTools -->|Only verified READ_ONLY tools or zero in-flight| SafeResume["Classify: SAFE_TO_RESUME<br/>(Original task set to terminal FAILED,<br/>recovery_status = 'interrupted_safe')"]
+    CheckTools -->|Pre-existing terminal state| Terminal["Classify: TERMINAL (Immutable)"]
     
     NeedsReview --> WriteTransitions["Log state_transitions & audit record"]
     SafeResume --> WriteTransitions
     Terminal --> WriteTransitions
+
+    SafeResume -.->|Operator Resumes| Continuation["Create Continuation Task<br/>(parent_task_id = original_task_id,<br/>status = 'pending',<br/>recovery_status = 'repaired')"]
+    Continuation --> WriteTransitions
     
     WriteTransitions --> Ready["Server Ready for Incoming Requests"]
 ```
@@ -361,6 +364,96 @@ CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_task ON approvals(task_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 ```
+
+### Migration 002: Triggers and Continuations (`002_immutability_triggers_and_continuations`)
+
+```sql
+-- Migration 002: Immutability triggers and task continuations
+
+-- Add parent_task_id column to tasks table for lineage tracking and safe resumption
+ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task ON tasks(parent_task_id);
+
+-- Trigger 1: Engine-level enforcement of terminal task immutability
+CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_status_update
+BEFORE UPDATE OF status ON tasks
+FOR EACH ROW
+WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')
+BEGIN
+    SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable');
+END;
+
+-- Trigger 2: Engine-level enforcement of valid transitions from PENDING
+CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_pending_transition
+BEFORE UPDATE OF status ON tasks
+FOR EACH ROW
+WHEN OLD.status = 'pending' AND NEW.status NOT IN ('executing', 'cancelled', 'failed')
+BEGIN
+    SELECT RAISE(ABORT, 'Illegal database state transition: pending tasks may only transition to executing, cancelled, or failed');
+END;
+
+-- Trigger 3: Engine-level enforcement of valid transitions from EXECUTING
+CREATE TRIGGER IF NOT EXISTS trg_prevent_illegal_executing_transition
+BEFORE UPDATE OF status ON tasks
+FOR EACH ROW
+WHEN OLD.status = 'executing' AND NEW.status NOT IN ('completed', 'failed', 'cancelled', 'limit_reached')
+BEGIN
+    SELECT RAISE(ABORT, 'Illegal database state transition: executing tasks may only transition to completed, failed, cancelled, or limit_reached');
+END;
+```
+
+---
+
+## 4. Remediation & Operational Invariants (Findings F7-01 to F7-06)
+
+### 4.1 F7-01: Continuation Task Pattern for Safe Resumption
+A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is strictly immutable. To resume execution without violating terminal immutability:
+1. The interrupted task remains in `FAILED` status indefinitely, serving as an immutable historical record.
+2. The operator or runtime invokes `create_continuation_task(original_task_id)` / `POST /api/tasks/{task_id}/resume`.
+3. A new task record is created with:
+   - `parent_task_id = original_task_id` (provenance link)
+   - `session_id = original_task.session_id` (shared session history)
+   - `status = 'pending'`
+   - `recovery_status = 'repaired'`
+   - `prompt = original_task.prompt`
+4. Idempotency is enforced: re-calling `create_continuation_task` on an already-continued task returns the existing continuation task without duplicate creation.
+5. Attempting to resume a `NEEDS_REVIEW` task raises `ValueError`.
+
+### 4.2 F7-02: Database-Engine-Level Immutability Enforcement
+Terminal state immutability and linear status transitions are enforced directly by SQLite engine triggers:
+- `trg_prevent_terminal_task_status_update` aborts any SQL `UPDATE` trying to modify status once terminal (`completed`, `cancelled`, `failed`, `limit_reached`).
+- Direct SQL updates bypassing Python application code raise `sqlite3.IntegrityError: Illegal database state transition: terminal tasks ... are immutable`.
+
+### 4.3 F7-03: Secret-Free Persistence Defense-in-Depth
+Credential sanitization (`redact_secrets`) is applied on all database write paths:
+- `tasks`: `prompt`, `error`, `response_text`, `termination_reason`
+- `transcript_messages`: `content`, `tool_calls_json`
+- `tool_executions`: `arguments_json`, `result_output`, `error`
+- `approvals`: `reason`, `decision_reason`
+- `state_transitions`: `reason`
+- `sessions`: `title`, `metadata_json`
+- runtime event logs: `payload`
+*Defense-in-depth notice:* Regex scrubbing provides active sanitization against accidental leakage of well-known secret patterns (API keys, tokens, Bearer headers, passwords). It is documented as defense-in-depth sanitization, not a formal cryptographic confidentiality guarantee.
+
+### 4.4 F7-04: Versioned Migration Upgrade and Rollback
+- MigrationRunner tracks migrations sequentially in `schema_migrations`.
+- Upgrading from v1 (`001_initial_schema`) to v2 (`002_immutability_triggers_and_continuations`) preserves 100% of existing rows without data loss.
+- In-flight migration failures abort via transactional rollback, leaving the schema clean without orphan tables.
+
+### 4.5 F7-05: Runtime-Owned Tool Classification Authority
+Tool safety classification during startup recovery is governed by the active runtime `ToolRegistry`, not database records:
+- Unregistered/unknown tools (including external or MCP tools) default fail-closed to `NEEDS_REVIEW`.
+- Even if a database record has `is_mutation=0` or `idempotent=1`, the tool is classified as `SAFE_TO_RESUME` only if `ToolRegistry.get(tool_name).risk_category == ToolRiskCategory.READ_ONLY`.
+- Mutating tools (`workspace_write`, `command_execution`, `destructive`) with forged or corrupted DB flags are overridden to `NEEDS_REVIEW`.
+
+### 4.6 F7-06: Authorization Invalidation Across Restart
+Per `2604.14228v3.pdf` §5 and §9.2, security grants and authorizations never survive process termination:
+- On startup, `StartupRecoveryEngine` executes:
+  `UPDATE approvals SET status = 'expired', decision_reason = 'Invalidated on process_restart' WHERE status IN ('pending', 'approved');`
+- Unconsumed `approved` tokens and `pending` tokens expire immediately.
+- `ApprovalRepository.consume_token` fails on expired authorizations (`status = 'consumed'` can only be transitioned from `status = 'approved'`).
+- Preserved states: `consumed`, `denied`, and previously `expired` records remain immutable.
 
 ---
 

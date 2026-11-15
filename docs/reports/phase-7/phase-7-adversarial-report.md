@@ -90,11 +90,84 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 
 ---
 
+### ADV-07: Direct SQL Mutation Bypass of Terminal Immutability Blocked by Database Engine Triggers
+- **Scenario:** An attacker, flawed migration, or rogue script executes a raw SQL `UPDATE` statement directly against the SQLite database connection, attempting to reactivate a `completed` or `failed` task to `executing` without going through Python application repositories.
+- **Threat:** Bypassing Python-level `InvalidStateTransitionError` checks by issuing raw SQL queries.
+- **Defense Implementation:** Migration `002_immutability_triggers_and_continuations` installs SQLite engine trigger `trg_prevent_terminal_task_status_update`.
+- **Observed Evidence:**
+  - Raw SQL `UPDATE tasks SET status = 'executing' WHERE id = ?;` immediately raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable`.
+  - Raw SQL jump from `pending` directly to `completed` raises `sqlite3.IntegrityError: Illegal database state transition: pending tasks may only transition to executing, cancelled, or failed`.
+  - The task status remains unmodified in SQLite.
+- **Test Proof:** `tests/test_persistence.py::test_database_level_trigger_terminal_immutability` (PASS).
+
+---
+
+### ADV-08: Database Flag Forgery & Unregistered Tool Safety Overridden by ToolRegistry
+- **Scenario:** A corrupted database record, untrusted MCP tool, or adversary marks an in-flight tool with `is_mutation = 0` and `idempotent = 1` in `tool_executions` to trick the recovery engine into classifying an interrupted mutating tool as `SAFE_TO_RESUME`.
+- **Threat:** Blind replay of unknown or mutating tools caused by relying on database flags alone.
+- **Defense Implementation:** `StartupRecoveryEngine` queries the active runtime `ToolRegistry`. Only tools registered in the runtime with `ToolRiskCategory.READ_ONLY` are considered safe. Unknown/unregistered tools default fail-closed to `NEEDS_REVIEW`.
+- **Observed Evidence:**
+  - An unregistered tool with `is_mutation=0, idempotent=1` in the database is classified as `NEEDS_REVIEW`.
+  - A registered mutating tool (`execute_command`) with forged database flags `is_mutation=0, idempotent=1` is overridden by `ToolRegistry` and classified as `NEEDS_REVIEW`.
+  - Only registered `READ_ONLY` tools (`read_file`) with matching flags are classified as `SAFE_TO_RESUME`.
+- **Test Proof:** `tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification` (PASS).
+
+---
+
+### ADV-09: Approved-but-Unconsumed Grants Expired Across Restart Boundary
+- **Scenario:** An operator approves a sensitive command (`execute_command`). The approval status is `approved`, but the application crashes or restarts before the command token is consumed by the runner.
+- **Threat:** Weaponizing stale pre-restart authorizations in a newly booted environment (`2604.14228v3.pdf` §5, §9.2).
+- **Defense Implementation:** `StartupRecoveryEngine` invalidates all authorizations `WHERE status IN ('pending', 'approved')` to `status = 'expired'`.
+- **Observed Evidence:**
+  - After restart, the unconsumed approved record is in `status == 'expired'`.
+  - Calling `consume_token()` returns `False` immediately.
+  - Pre-restart approval tokens cannot be used to execute commands.
+- **Test Proof:** `tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart` (PASS).
+
+---
+
+### ADV-10: Secret Scrubbing Audited Across Every SQLite Table
+- **Scenario:** Raw secrets (Anthropic keys, GitHub PATs, Bearer tokens, passwords) are passed into task prompts, error logs, response text, transcript turns, tool arguments, approval requests, and session metadata.
+- **Threat:** Plain-text credential persistence in SQLite database files.
+- **Defense Implementation:** `redact_secrets` is wired into every repository write path: `tasks`, `transcript_messages`, `tool_executions`, `approvals`, `state_transitions`, `sessions`, and event logs.
+- **Observed Evidence:**
+  - Raw SQL inspection of all SQLite table rows confirms that plain-text secret strings (`sk-ant-api03-...`, `ghp_...`, Bearer payloads) are 100% absent across every column and table.
+  - Defense-in-depth sanitization replaces credentials with `[REDACTED]`, `[REDACTED_TOKEN]`, or `***`.
+- **Test Proof:** `tests/test_persistence.py::test_secret_scrubbing_across_all_tables` (PASS).
+
+---
+
+### ADV-11: Broken Migration Transaction Rollback
+- **Scenario:** A database migration contains invalid SQL syntax or fails halfway through execution.
+- **Threat:** Partial schema application, broken tables, or corrupted `schema_migrations` tracking records.
+- **Defense Implementation:** `MigrationRunner` executes schema changes within atomic SQLite transactions.
+- **Observed Evidence:**
+  - When an invalid statement is encountered, the transaction rolls back completely.
+  - Partial tables (`broken_table`) are not created in `sqlite_master`.
+  - `schema_migrations` remains clean with only fully committed versions.
+- **Test Proof:** `tests/test_persistence.py::test_migration_failure_rollback` (PASS).
+
+---
+
+### ADV-12: Continuation Task Lineage & Idempotency
+- **Scenario:** An interrupted task is classified as `SAFE_TO_RESUME`. The operator requests resumption.
+- **Threat:** Violating terminal immutability by altering the original task, or double-spawning duplicate tasks.
+- **Defense Implementation:** `StartupRecoveryEngine.create_continuation_task` keeps the original task in terminal `FAILED` (`recovery_status = 'interrupted_safe'`), and creates a new `PENDING` task linked via `parent_task_id`.
+- **Observed Evidence:**
+  - The original task remains strictly immutable in terminal `FAILED` state.
+  - A new continuation task is created with `parent_task_id = original_task.id` and `recovery_status = 'repaired'`.
+  - Re-requesting continuation on the same task returns the existing continuation idempotently.
+  - Attempting to resume a `NEEDS_REVIEW` task is rejected with an explicit `ValueError`.
+- **Test Proof:** `tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle` (PASS).
+
+---
+
 ## 3. Summary Verdict
 
 All adversarial, edge-case, and crash-boundary scenarios pass with 100% compliance. The persistence and recovery subsystems guarantee:
 1. Complete determinism under crash boundaries.
 2. Zero blind replay of mutating actions.
 3. Fail-closed security for human approvals.
-4. Absolute confidentiality of secrets on disk.
+4. Defense-in-depth sanitization of secrets on disk across all tables.
 5. Linearizable optimistic concurrency control.
+6. Database-engine-level enforcement of terminal immutability via SQLite triggers.

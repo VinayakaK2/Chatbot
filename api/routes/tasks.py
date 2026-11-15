@@ -85,6 +85,43 @@ def cancel_task_by_id(
     return cancelled
 
 
+@router.post(
+    "/{task_id}/resume",
+    response_model=TaskResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Resume an interrupted task by creating a linked continuation task",
+)
+async def resume_interrupted_task(
+    task_id: str,
+    task_service: TaskService = Depends(get_task_service),
+) -> TaskResponse:
+    """Safely resume an interrupted task with INTERRUPTED_SAFE recovery status.
+
+    Preserves the original interrupted task as immutable terminal FAILED,
+    and returns a newly created linked continuation task in PENDING status.
+    """
+    task = task_service.get_task(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task with ID '{task_id}' not found.",
+        )
+    try:
+        continuation = await task_service.resume_task(task_id)
+        return continuation
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.error("Error resuming task %s: %s", task_id, type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume task: {str(exc)}",
+        ) from exc
+
+
 @router.get(
     "/{task_id}/events/history",
     response_model=List[RuntimeEvent],

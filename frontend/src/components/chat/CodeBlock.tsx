@@ -10,6 +10,7 @@ export interface CodeBlockProps {
   code: string
   language?: string
   showLineNumbers?: boolean
+  fitToScreen?: boolean
 }
 
 // Tokenize line for lightweight, reliable syntax highlighting without external heavy libs
@@ -81,6 +82,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   code,
   language = 'text',
   showLineNumbers = true,
+  fitToScreen = true,
 }) => {
   const [copied, setCopied] = useState(false)
   const lines = code.replace(/\r\n/g, '\n').split('\n')
@@ -96,7 +98,11 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   }
 
   return (
-    <div className="code-block-container" role="region" aria-label={`Code block: ${language}`}>
+    <div
+      className={`code-block-container ${fitToScreen ? 'is-fit-to-screen' : ''}`}
+      role="region"
+      aria-label={`Code block: ${language}`}
+    >
       <div className="code-block-header">
         <span className="code-block-language">{language || 'text'}</span>
         <button
@@ -120,16 +126,16 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
       </div>
 
       <div className="code-block-scroll">
-        <pre className="code-block-pre">
+        <pre className={`code-block-pre ${fitToScreen ? 'is-fit-to-screen' : ''}`}>
           <code>
             {lines.map((line, idx) => (
-              <div key={idx} className="code-line">
+              <div key={idx} className={`code-line ${fitToScreen ? 'is-fit-to-screen' : ''}`}>
                 {showLineNumbers && (
                   <span className="code-line-number" aria-hidden="true">
                     {idx + 1}
                   </span>
                 )}
-                <span className="code-line-content">
+                <span className={`code-line-content ${fitToScreen ? 'is-fit-to-screen' : ''}`}>
                   {tokenizeLine(line, language)}
                   {line === '' ? ' ' : ''}
                 </span>

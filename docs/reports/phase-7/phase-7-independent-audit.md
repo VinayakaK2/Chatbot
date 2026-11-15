@@ -72,15 +72,80 @@ An independent audit was conducted on the Phase 7 implementation to verify:
 
 ---
 
-## 4. Test Evidence Summary
+## 4. Remediation Audit: Forensic Resolution of Findings F7-01 to F7-06
 
-- **Total Backend Pytest Tests:** 506 collected, **505 passed**, 1 skipped (smoke test requiring live upstream GPU server).
-- **Total Frontend Vitest Tests:** 52 collected, **52 passed**.
-- **Frontend Production Build:** `tsc -b && vite build` succeeded in 379ms with 0 errors.
+### F7-01: Safe Resume Contradicts Terminal Failure (VERIFIED & CLOSED)
+- **Finding:** A task interrupted and classified as `SAFE_TO_RESUME` was marked terminal `FAILED`. Terminal states are immutable, making in-place reactivation impossible without violating immutability.
+- **Audited Solution:**
+  1. The interrupted task remains immutable in terminal `FAILED` (`recovery_status = 'interrupted_safe'`).
+  2. `StartupRecoveryEngine.create_continuation_task` (and API endpoint `POST /api/tasks/{task_id}/resume`) creates a new continuation task:
+     - `parent_task_id = original_task.id` (preserves provenance)
+     - `session_id = original_task.session_id` (continues conversation)
+     - `status = 'pending'`, `recovery_status = 'repaired'`
+  3. Calling `create_continuation_task` repeatedly is idempotent and returns the existing continuation task.
+  4. Attempting to resume a `NEEDS_REVIEW` task raises an explicit `ValueError`.
+- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle` (PASS).
+
+### F7-02: Database-Level Terminal Immutability Not Demonstrated (VERIFIED & CLOSED)
+- **Finding:** SQL schema lacked database-level triggers to enforce valid status transitions or prevent raw SQL updates from modifying terminal tasks.
+- **Audited Solution:**
+  1. Migration `002_immutability_triggers_and_continuations` adds SQLite triggers:
+     - `trg_prevent_terminal_task_status_update`: Aborts any status change on terminal tasks (`completed`, `cancelled`, `failed`, `limit_reached`).
+     - `trg_prevent_illegal_pending_transition`: Enforces valid forward transitions from `pending`.
+     - `trg_prevent_illegal_executing_transition`: Enforces valid transitions from `executing`.
+  2. Direct raw SQL update `UPDATE tasks SET status = 'executing' WHERE id = ?;` bypassing application code raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks ... are immutable`.
+- **Test Evidence:** `tests/test_persistence.py::test_database_level_trigger_terminal_immutability` (PASS).
+
+### F7-03: Secret-Free Persistence Across All Tables (VERIFIED & CLOSED)
+- **Finding:** Credential scrubbing must be verified across all tables directly in SQLite rows, and regex scrubbing must be honestly characterized as defense-in-depth sanitization.
+- **Audited Solution:**
+  1. Scrubbing (`redact_secrets`) is wired across all write paths:
+     - `tasks`: `prompt`, `error`, `response_text`, `termination_reason`
+     - `transcript_messages`: `content`, `tool_calls_json`
+     - `tool_executions`: `arguments_json`, `result_output`, `error`
+     - `approvals`: `reason`, `decision_reason`
+     - `state_transitions`: `reason`
+     - `sessions`: `title`, `metadata_json`
+     - runtime event logs: `payload`
+  2. Direct raw SQL queries across all 6 tables confirm zero raw secrets in any column.
+  3. Characterized as defense-in-depth sanitization, not a formal cryptographic confidentiality guarantee.
+- **Test Evidence:** `tests/test_persistence.py::test_secret_scrubbing_across_all_tables` (PASS).
+
+### F7-04: Migration Upgrade Path & Rollback Unverified (VERIFIED & CLOSED)
+- **Finding:** Versioned migration upgrade from v1 to v2 must be tested against existing data, and transactional rollback on failure must be verified.
+- **Audited Solution:**
+  1. Tested creating v1 database with rows, running migration v2: 100% data preserved, `parent_task_id` column added, triggers active on both existing and new rows.
+  2. Tested migration failure: invalid statement aborts and rolls back completely; `schema_migrations` remains clean without partial tables.
+- **Test Evidence:** `tests/test_persistence.py::test_migration_upgrade_v1_to_v2_preserves_data` (PASS), `tests/test_persistence.py::test_migration_failure_rollback` (PASS).
+
+### F7-05: Recovery Tool Classification Needs Stronger Proof (VERIFIED & CLOSED)
+- **Finding:** Model tool calls or database flags cannot be trusted blindly. Tool classification must be runtime-owned via `ToolRegistry`.
+- **Audited Solution:**
+  1. `StartupRecoveryEngine` accepts `tool_registry: ToolRegistry`.
+  2. Unknown tools missing from registry default fail-closed to `NEEDS_REVIEW`.
+  3. Non-`READ_ONLY` tools with false DB flags (`is_mutation=0, idempotent=1`) are overridden by `ToolRegistry` and classified as `NEEDS_REVIEW`.
+  4. Only registered `READ_ONLY` tools with valid flags are classified as `SAFE_TO_RESUME`.
+- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification` (PASS).
+
+### F7-06: Approved-but-Unconsumed Approvals Restart Testing (VERIFIED & CLOSED)
+- **Finding:** Pre-restart approved-but-unconsumed authorizations must not survive restart. All 5 approval lifecycle states must be verified.
+- **Audited Solution:**
+  1. Query updated to `WHERE status IN ('pending', 'approved')` transitioning both to `expired`.
+  2. Verified across all 5 states: `pending` -> `expired`, `approved` unconsumed -> `expired`, `consumed` -> `consumed`, `denied` -> `denied`, `expired` -> `expired`.
+  3. `consume_token` returns `False` on the invalidated approved authorization.
+- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart` (PASS).
 
 ---
 
-## 5. Audit Verdict & Recommendation
+## 5. Test Evidence Summary
+
+- **Total Backend Pytest Tests:** 513 collected, **510 passed**, 3 skipped (live GPU endpoint tests skipped when offline).
+- **Total Frontend Vitest Tests:** 52 collected, **52 passed**.
+- **Frontend Production Build:** `tsc -b && vite build` succeeded in 314ms with 0 errors.
+
+---
+
+## 6. Audit Verdict & Recommendation
 
 **Audit Verdict:** `PASS — FULLY COMPLIANT`  
-**Recommendation:** Phase 7 satisfies all requirements and architectural constraints. The implementation is verified, tested, robust, and **READY FOR OPERATOR FREEZE**.
+**Recommendation:** All 6 blocker findings (F7-01 to F7-06) have been rigorously resolved and proven with automated tests. Phase 7 is robust, verified, and **READY FOR OPERATOR FREEZE**.

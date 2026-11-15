@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import logging
 import sqlite3
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("agent_runtime.storage.migrations")
 
@@ -202,7 +202,6 @@ class MigrationRunner:
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 applied_at TEXT NOT NULL
             );
@@ -237,8 +236,8 @@ class MigrationRunner:
             cursor.executescript(ddl)
             now_iso = datetime.now(timezone.utc).isoformat()
             cursor.execute(
-                "INSERT INTO schema_migrations (version, name, description, applied_at) VALUES (?, ?, ?, ?);",
-                (version, description, description, now_iso),
+                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?);",
+                (version, description, now_iso),
             )
             new_count += 1
 

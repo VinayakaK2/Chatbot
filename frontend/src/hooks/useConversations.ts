@@ -9,14 +9,7 @@ import type { Conversation, Message, Project } from '../types/api'
 const STORAGE_KEY_CONVERSATIONS = 'agent_runtime_conversations_v1'
 const STORAGE_KEY_PROJECTS = 'agent_runtime_projects_v1'
 
-const DEFAULT_PROJECTS: Project[] = [
-  {
-    id: 'proj-default',
-    name: 'Agent Runtime Core',
-    description: 'Autonomous Coding Agent Workspace',
-    created_at: new Date().toISOString(),
-  },
-]
+const DEFAULT_PROJECTS: Project[] = []
 
 function createInitialConversation(projectId?: string): Conversation {
   const id = `conv-${Date.now()}`
@@ -25,7 +18,7 @@ function createInitialConversation(projectId?: string): Conversation {
     title: 'New Conversation',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    project_id: projectId || 'proj-default',
+    project_id: projectId,
     pinned: false,
     archived: false,
     model: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
@@ -38,7 +31,11 @@ export function useConversations() {
     try {
       const stored = localStorage.getItem(STORAGE_KEY_PROJECTS)
       if (stored) {
-        return JSON.parse(stored) as Project[]
+        const parsed = JSON.parse(stored) as Project[]
+        // Explicitly filter out legacy mock "Agent Runtime Core"
+        return parsed.filter(
+          (p) => p.name !== 'Agent Runtime Core' && p.id !== 'proj-default'
+        )
       }
     } catch (e) {
       console.warn('Could not read projects from localStorage', e)
@@ -51,7 +48,11 @@ export function useConversations() {
       const stored = localStorage.getItem(STORAGE_KEY_CONVERSATIONS)
       if (stored) {
         const parsed = JSON.parse(stored) as Conversation[]
-        if (parsed.length > 0) return parsed
+        if (parsed.length > 0) {
+          return parsed.map((c) =>
+            c.project_id === 'proj-default' ? { ...c, project_id: undefined } : c
+          )
+        }
       }
     } catch (e) {
       console.warn('Could not read conversations from localStorage', e)

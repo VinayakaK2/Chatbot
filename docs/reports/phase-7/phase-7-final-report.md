@@ -21,12 +21,14 @@ Phase 7 of the Chatbot Agent Runtime project has been fully implemented, rigorou
 ║     PHASE 7 VERDICT: PASS — READY FOR OPERATOR FREEZE                    ║
 ║                                                                          ║
 ║     • Authoritative SQLite persistence layer: Operational (WAL mode)     ║
-║     • Versioned schema migrations (001_initial_schema): Idempotent       ║
-║     • Crash boundary classification: Deterministic (Zero blind replay)   ║
-║     • Volatile approval invalidation across restart: Verified (Expired)  ║
-║     • Secret redaction prior to database write: Verified                 ║
+║     • Versioned schema migrations (001 -> 002): Idempotent & tested      ║
+║     • Engine-level terminal immutability: Enforced via SQLite triggers   ║
+║     • Continuation task lifecycle: Safe resumption with provenance       ║
+║     • Runtime ToolRegistry authority: Fail-closed on unverified tools    ║
+║     • Ephemeral authorization boundary: Stale grants expired on restart  ║
+║     • Secret scrubbing defense-in-depth: Audited across all tables       ║
 ║     • Session context reconstruction: Complete & ordered                 ║
-║     • Backend test suite: 505 passed, 1 skipped, 0 failed               ║
+║     • Backend test suite: 510 passed, 3 skipped, 0 failed               ║
 ║     • Frontend test suite: 52 passed, 0 failed                           ║
 ║     • Frontend build: 0 TypeScript / bundling errors                     ║
 ║     • Frozen Phase 0–6 regression status: 0 regressions                  ║
@@ -43,9 +45,9 @@ In accordance with strict operating rules, **Phase 7 has NOT been automatically 
 | Section in Research Reference | Core Principle / Requirement | Implemented Design in Phase 7 |
 |:---|:---|:---|
 | **§9.1 — Transcript Model** | Durable append-only transcript records separate from derived context projections | `TranscriptRepository` records immutable transcript turns with monotonic sequence numbers into `transcript_messages`. Working memory in `ContextManager` reloads from this authoritative store. |
-| **§9.2 — Resume, Fork, and Not Restoring Permissions** | Permissions and approvals must not survive process restarts or crash boundaries | `StartupRecoveryEngine` runs on application boot and marks all `pending` approvals `EXPIRED`. Resumed sessions operate with fail-closed permissions. |
+| **§9.2 — Resume, Fork, and Not Restoring Permissions** | Permissions and approvals must not survive process restarts or crash boundaries | `StartupRecoveryEngine` runs on application boot and marks all `status IN ('pending', 'approved')` authorizations `EXPIRED`. Resumed sessions operate with fail-closed permissions. |
 | **§10.2 — Concurrency & SQLite WAL** | Transactional, crash-safe state management with non-blocking reads | `DatabaseManager` enforces `PRAGMA journal_mode = WAL`, `PRAGMA foreign_keys = ON`, `PRAGMA busy_timeout = 5000`. Readers do not block writers. |
-| **§12.3 — Safety Boundary on Crash** | Never assume state of external environment after sudden interruption during mutating action | Tasks interrupted during `write_file` or `execute_command` are classified as `NEEDS_REVIEW` (marked `FAILED`), with zero blind replay. |
+| **§12.3 — Safety Boundary on Crash** | Never assume state of external environment after sudden interruption during mutating action | Tasks interrupted during mutating tools (`workspace_write`, `command_execution`, `destructive`) or unknown tools are classified as `NEEDS_REVIEW` (marked `FAILED`), with zero blind replay. |
 
 ---
 
@@ -54,7 +56,7 @@ In accordance with strict operating rules, **Phase 7 has NOT been automatically 
 ### 3.1 Relational Schema & Versioned Migrations
 The relational database layer (`storage/`) tracks all execution state across 7 relational tables:
 1. `sessions`: Session UUID, title, workspace path, status (`active`, `completed`, `archived`), metadata JSON, and timestamps.
-2. `tasks`: Task UUID, prompt, status, recovery status (`clean`, `interrupted_safe`, `needs_review`, `repaired`), response text, usage JSON, error, tool calls count, termination reason, version counter for optimistic locking.
+2. `tasks`: Task UUID, parent task UUID (`parent_task_id`), prompt, status, recovery status (`clean`, `interrupted_safe`, `needs_review`, `repaired`), response text, usage JSON, error, tool calls count, termination reason, version counter for optimistic locking.
 3. `state_transitions`: Linearizable audit trail recording `(entity_type, entity_id, from_state, to_state, reason, actor, created_at)`.
 4. `transcript_messages`: Monotonically sequenced conversation turns preserving roles (`system`, `user`, `assistant`, `tool`), tool call IDs, arguments, and content.
 5. `tool_executions`: Granular execution tracking capturing pre-call state (`started`), post-call outcome (`completed`, `failed`, `interrupted`), duration, and exit codes.
@@ -71,27 +73,35 @@ The relational database layer (`storage/`) tracks all execution state across 7 r
                      │
       Scan tasks WHERE status = 'executing'
                      │
-      Check in-flight tool_executions (execution_state = 'started')
+      Check in-flight tool_executions against ToolRegistry
                     / \
                    /   \
-  Any tool with is_mutation=True    All tools read-only OR zero tools
-         OR idempotent=False                  in flight
-                 /       \                        │
-                /         \                       │
-               ▼           ▼                      ▼
-       [NEEDS_REVIEW]                          [SAFE_TO_RESUME]
-  Task marked FAILED                       Task marked FAILED
-  recovery_status = 'needs_review'         recovery_status = 'interrupted_safe'
-  Tools marked 'interrupted'               Tools marked 'interrupted'
-  Zero blind replay. Operator             Safe to resume from saved transcript
-  inspection required.                    and verified state.
+  Any tool with is_mutation=True    All tools verified READ_ONLY OR zero
+         OR idempotent=False                  tools in flight
+                 /       \                               │
+                /         \                              │
+               ▼           ▼                             ▼
+       [NEEDS_REVIEW]                                 [SAFE_TO_RESUME]
+  Task marked FAILED                             Original task marked FAILED
+  recovery_status = 'needs_review'               recovery_status = 'interrupted_safe'
+  Tools marked 'interrupted'                     Tools marked 'interrupted'
+  Zero blind replay. Operator                    Safe to resume via continuation task.
+  inspection required.                           (Preserves terminal immutability)
 ```
 
-### 3.3 Ephemeral Security Boundary on Startup
-All volatile approvals in `status == 'pending'` are expired on startup with resolution reason `"Invalidated on process_restart"`. Single-use token consumption returns `False` immediately, ensuring pre-crash approvals cannot be weaponized.
+### 3.3 Ephemeral Security Boundary on Startup (F7-06)
+All volatile approvals in `status IN ('pending', 'approved')` are expired on startup with resolution reason `"Invalidated on process_restart"`. Single-use token consumption returns `False` immediately, ensuring pre-crash authorizations cannot be weaponized.
 
-### 3.4 Secret Scrubbing at Persistence Boundary
-`tools.security.redact_secrets()` sanitizes arguments, outputs, and transcripts before disk writes. Bearer tokens, passwords, API keys, and GitHub personal access tokens are completely scrubbed from persisted tables.
+### 3.4 Secret Scrubbing at Persistence Boundary (F7-03)
+`tools.security.redact_secrets()` sanitizes arguments, outputs, transcripts, prompts, errors, transition reasons, and session metadata before disk writes. Direct raw SQL audits confirm zero plain-text API keys, Bearer tokens, or passwords exist across all 6 tables. Documented as defense-in-depth sanitization.
+
+### 3.5 Forensic Resolution of Blocker Findings F7-01 to F7-06
+- **F7-01 (Safe Resume & Terminal Immutability):** Interrupted tasks remain immutable in terminal `FAILED` (`interrupted_safe`). Safe resume is executed by generating a new linked continuation task (`parent_task_id = original_task_id`, `status = 'pending'`, `recovery_status = 'repaired'`). Duplicate continuations are idempotently prevented.
+- **F7-02 (Database-Engine-Level Immutability):** Migration `002_immutability_triggers_and_continuations` adds SQLite triggers (`trg_prevent_terminal_task_status_update`, etc.). Direct raw SQL attempts to reactivate terminal tasks fail with `sqlite3.IntegrityError`.
+- **F7-03 (Secret-Free Persistence Across All Tables):** Scrubbing is verified across every table directly in SQLite storage, with zero secrets leaked.
+- **F7-04 (Migration Upgrade & Rollback):** Upgrading from v1 to v2 preserves 100% of data and activates triggers. Failed migrations roll back cleanly without schema corruption.
+- **F7-05 (Runtime ToolRegistry Authority):** Tool safety classification is runtime-owned via `ToolRegistry`. Unknown tools and mutating tools with forged DB flags default fail-closed to `NEEDS_REVIEW`.
+- **F7-06 (All 5 Approval States on Restart):** Both `pending` and unconsumed `approved` grants expire on restart. `consumed`, `denied`, and `expired` records remain immutable.
 
 ---
 
@@ -104,9 +114,10 @@ All volatile approvals in `status == 'pending'` are expired on startup with reso
 - **Phase 7 Regression Evidence:** [`docs/reports/phase-7/phase-7-regression-evidence.md`](file:///h:/chatbot/docs/reports/phase-7/phase-7-regression-evidence.md)
 
 ### Test Totals
-- **Backend Tests:** **505 passed**, 1 skipped, 0 failed.
+- **Backend Tests:** **510 passed**, 3 skipped, 0 failed.
+- **Phase 7 Direct Tests:** **31 passed** (13 persistence + 12 recovery + 6 session API).
 - **Frontend Tests:** **52 passed**, 0 failed.
-- **Frontend Build:** Clean compilation, 0 errors.
+- **Frontend Build:** Clean compilation, 0 errors (314ms).
 
 ---
 

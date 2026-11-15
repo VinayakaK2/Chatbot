@@ -2,18 +2,23 @@
 
 from datetime import datetime, timezone
 import logging
-from typing import List
+from typing import List, Optional
+import uuid
 
 from api.schemas.tasks import TaskStatus
+from core.tool_contracts import ToolRiskCategory
+from core.tool_registry import ToolRegistry
 from storage.database import DatabaseManager
 from storage.models import (
     ExecutionState,
     RecoveryClassification,
     RecoveryStatus,
     RecoverySummary,
+    TaskRecord,
 )
 from storage.repositories import (
     ApprovalRepository,
+    TaskNotFoundError,
     TaskRepository,
     ToolExecutionRepository,
 )
@@ -24,14 +29,19 @@ logger = logging.getLogger("agent_runtime.core.recovery")
 class StartupRecoveryEngine:
     """Detects and reconciles interrupted executions and stale approvals after a process restart."""
 
-    def __init__(self, db: DatabaseManager) -> None:
+    def __init__(self, db: DatabaseManager, tool_registry: Optional[ToolRegistry] = None) -> None:
         self.db = db
+        self.tool_registry = tool_registry
         self.task_repo = TaskRepository(db)
         self.tool_repo = ToolExecutionRepository(db)
         self.approval_repo = ApprovalRepository(db)
 
-    def reconcile(self) -> RecoverySummary:
+    def reconcile(self, auto_create_continuations: bool = False) -> RecoverySummary:
         """Scan storage on application boot, classify interrupted tasks, and invalidate stale approvals.
+
+        Args:
+            auto_create_continuations: If True, automatically spawn pending continuation tasks
+                for interrupted tasks classified as SAFE_TO_RESUME.
 
         Returns:
             RecoverySummary: Summary of identified tasks and recovery classifications.
@@ -39,7 +49,7 @@ class StartupRecoveryEngine:
         logger.info("Executing startup recovery and session reconciliation...")
         summary = RecoverySummary()
 
-        # 1. Invalidate all pending approvals across restart boundary
+        # 1. Invalidate all pending and approved authorizations across restart boundary
         invalidated_approvals = self.approval_repo.invalidate_pending_approvals(
             reason="process_restart"
         )
@@ -60,18 +70,43 @@ class StartupRecoveryEngine:
         for task_id in executing_ids:
             inflight_tools = self.tool_repo.get_inflight_for_task(task_id)
 
-            has_mutating_inflight = any(
-                t.is_mutation or not t.idempotent for t in inflight_tools
-            )
+            # Evaluate each in-flight tool against runtime-owned ToolRegistry
+            # Unknown tools or tools claiming to be read-only in database records
+            # must default to NEEDS_REVIEW unless verified by ToolRegistry (F7-05).
+            is_mutating_or_unsafe = False
+            mutating_names: List[str] = []
+            read_only_names: List[str] = []
 
-            if has_mutating_inflight:
-                # Dangerous crash boundary: Non-idempotent tool was executing!
-                mutating_names = [
-                    t.tool_name for t in inflight_tools if t.is_mutation or not t.idempotent
-                ]
+            for t in inflight_tools:
+                tool_is_safe = False
+                if self.tool_registry is not None:
+                    if self.tool_registry.has(t.tool_name):
+                        tool_def = self.tool_registry.get(t.tool_name)
+                        if (
+                            tool_def.risk_category == ToolRiskCategory.READ_ONLY
+                            and not t.is_mutation
+                            and t.idempotent
+                        ):
+                            tool_is_safe = True
+                    else:
+                        # Unknown tool: even if DB has is_mutation=0 or idempotent=1,
+                        # database records could be unverified; default to unsafe!
+                        tool_is_safe = False
+                else:
+                    if not t.is_mutation and t.idempotent:
+                        tool_is_safe = True
+
+                if tool_is_safe:
+                    read_only_names.append(t.tool_name)
+                else:
+                    is_mutating_or_unsafe = True
+                    mutating_names.append(t.tool_name)
+
+            if is_mutating_or_unsafe:
+                # Dangerous crash boundary: Non-idempotent, mutating, or unknown tool was executing!
                 reason = f"interrupted_during_{'_'.join(mutating_names)}"
                 error_msg = (
-                    f"Task execution interrupted during non-idempotent tool call(s): {', '.join(mutating_names)}. "
+                    f"Task execution interrupted during unverified or non-idempotent tool call(s): {', '.join(mutating_names)}. "
                     "External state cannot be automatically determined. Manual inspection required before re-executing."
                 )
 
@@ -91,7 +126,7 @@ class StartupRecoveryEngine:
                     error=error_msg,
                     termination_reason=reason,
                     actor="startup_recovery",
-                    reason="Classified as NEEDS_REVIEW: in-flight mutating tool call detected at restart",
+                    reason="Classified as NEEDS_REVIEW: in-flight mutating or unverified tool call detected at restart",
                 )
 
                 summary.needs_review_count += 1
@@ -106,8 +141,7 @@ class StartupRecoveryEngine:
                 logger.warning("Interrupted task %s classified as NEEDS_REVIEW (%s)", task_id, mutating_names)
 
             else:
-                # Safe boundary: either no in-flight tools, or only read-only/idempotent operations
-                read_only_names = [t.tool_name for t in inflight_tools]
+                # Safe boundary: either no in-flight tools, or only registered read-only operations
                 for t in inflight_tools:
                     self.tool_repo.record_completed(
                         call_id=t.call_id,
@@ -138,4 +172,66 @@ class StartupRecoveryEngine:
                 )
                 logger.info("Interrupted task %s classified as SAFE_TO_RESUME", task_id)
 
+                if auto_create_continuations:
+                    continuation = self.create_continuation_task(task_id)
+                    summary.continuation_task_ids.append(continuation.id)
+
         return summary
+
+    def create_continuation_task(self, original_task_id: str) -> TaskRecord:
+        """Create a new continuation task for an interrupted task safely preserved in terminal FAILED state.
+
+        Per F7-01 and 2604.14228v3.pdf §9.2:
+        1. Terminal tasks remain immutable in FAILED state with recovery_status=INTERRUPTED_SAFE.
+        2. A new continuation task is spawned in PENDING state with parent_task_id pointing to original_task_id.
+        3. Recovery status of continuation task is set to REPAIRED.
+        """
+        original = self.task_repo.get(original_task_id)
+        if not original:
+            raise TaskNotFoundError(f"Original task '{original_task_id}' not found.")
+
+        # Verify recovery eligibility
+        if original.recovery_status != RecoveryStatus.INTERRUPTED_SAFE:
+            raise ValueError(
+                f"Task '{original_task_id}' cannot be resumed: recovery status is '{original.recovery_status}', "
+                f"expected '{RecoveryStatus.INTERRUPTED_SAFE.value}'."
+            )
+
+        # Check if an active continuation task already exists to prevent duplicate execution
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM tasks WHERE parent_task_id = ? AND status != 'failed';",
+            (original_task_id,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            existing_rec = self.task_repo.get(existing[0])
+            if existing_rec:
+                logger.info(
+                    "Found existing continuation task %s for original task %s",
+                    existing[0],
+                    original_task_id,
+                )
+                return existing_rec
+
+        # Create new continuation task linked via parent_task_id
+        continuation_id = str(uuid.uuid4())
+        continuation = TaskRecord(
+            id=continuation_id,
+            session_id=original.session_id,
+            parent_task_id=original.id,
+            prompt=original.prompt,
+            status=TaskStatus.PENDING,
+            recovery_status=RecoveryStatus.REPAIRED,
+            model=original.model,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        saved = self.task_repo.create(continuation)
+        logger.info(
+            "Created continuation task %s for interrupted task %s (session %s)",
+            continuation_id,
+            original_task_id,
+            original.session_id,
+        )
+        return saved

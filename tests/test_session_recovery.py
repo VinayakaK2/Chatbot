@@ -17,6 +17,8 @@ from typing import Generator
 from api.schemas.tasks import TaskStatus
 from core.recovery import StartupRecoveryEngine
 from core.session_manager import SessionManager
+from core.tool_contracts import ToolDefinition, ToolRiskCategory
+from core.tool_registry import ToolRegistry
 from storage.database import DatabaseManager
 from storage.migrations import MigrationRunner
 from storage.models import (
@@ -30,6 +32,7 @@ from storage.models import (
 )
 from storage.repositories import (
     ApprovalRepository,
+    InvalidStateTransitionError,
     SessionRepository,
     TaskRepository,
     ToolExecutionRepository,
@@ -426,4 +429,237 @@ def test_recovery_batch_interrupted_mixed_tasks(disk_db_path: Path) -> None:
     assert task_repo2.get(t_a.id).recovery_status == RecoveryStatus.INTERRUPTED_SAFE
     assert task_repo2.get(t_b.id).recovery_status == RecoveryStatus.INTERRUPTED_SAFE
     assert task_repo2.get(t_c.id).recovery_status == RecoveryStatus.NEEDS_REVIEW
+    db2.close()
+
+
+def test_recovery_continuation_task_lifecycle(disk_db_path: Path) -> None:
+    """Verify F7-01: Terminal FAILED immutability and safe continuation task creation.
+
+    Per 2604.14228v3.pdf §9.2:
+    1. Interrupted task is transitioned to terminal FAILED with recovery_status=INTERRUPTED_SAFE.
+    2. Terminal immutability is strictly preserved: original task cannot be reactivated.
+    3. create_continuation_task spawns a new linked task (parent_task_id) in PENDING status.
+    4. Duplicate continuation requests return existing continuation without double-spawning.
+    5. Attempting to resume a NEEDS_REVIEW task raises an explicit error.
+    """
+    # Process 1: start task, transition to EXECUTING
+    db1 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db1.get_connection())
+    session_repo1 = SessionRepository(db1)
+    task_repo1 = TaskRepository(db1)
+
+    session = session_repo1.create_session(title="Continuation Session")
+    original_task = task_repo1.create_task(
+        prompt="Analyze codebase architecture",
+        session_id=session.id,
+    )
+    task_repo1.transition_task_state(original_task.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    db1.close()  # Sudden crash
+
+    # Process 2: boots, runs reconciliation
+    db2 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    recovery = StartupRecoveryEngine(db2)
+    summary = recovery.reconcile()
+
+    assert summary.interrupted_tasks_found == 1
+    assert summary.safe_to_resume_count == 1
+
+    task_repo2 = TaskRepository(db2)
+    reconciled_orig = task_repo2.get(original_task.id)
+    assert reconciled_orig.status == TaskStatus.FAILED
+    assert reconciled_orig.recovery_status == RecoveryStatus.INTERRUPTED_SAFE
+
+    # 1. Verify terminal immutability: cannot transition original task back to EXECUTING
+    with pytest.raises(InvalidStateTransitionError, match="Cannot transition task"):
+        task_repo2.transition_task_state(original_task.id, to_status=TaskStatus.EXECUTING, expected_version=reconciled_orig.version)
+
+    # 2. Create continuation task
+    continuation = recovery.create_continuation_task(original_task.id)
+    assert continuation.id != original_task.id
+    assert continuation.parent_task_id == original_task.id
+    assert continuation.session_id == session.id
+    assert continuation.prompt == "Analyze codebase architecture"
+    assert continuation.status == TaskStatus.PENDING
+    assert continuation.recovery_status == RecoveryStatus.REPAIRED
+
+    # 3. Duplicate continuation check: calling again returns the existing continuation
+    continuation_second = recovery.create_continuation_task(original_task.id)
+    assert continuation_second.id == continuation.id
+
+    # 4. Attempt to create continuation for task with NEEDS_REVIEW: must raise ValueError
+    needs_review_task = task_repo2.create_task(prompt="Unsafe task", session_id=session.id)
+    task_repo2.transition_task_state(needs_review_task.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    task_repo2.transition_state(
+        task_id=needs_review_task.id,
+        target_status=TaskStatus.FAILED,
+        recovery_status=RecoveryStatus.NEEDS_REVIEW,
+        reason="Marked needs review",
+    )
+
+    with pytest.raises(ValueError, match="expected 'interrupted_safe'"):
+        recovery.create_continuation_task(needs_review_task.id)
+
+    db2.close()
+
+
+def test_recovery_runtime_tool_registry_authoritative_classification(disk_db_path: Path) -> None:
+    """Verify F7-05: Tool classification is runtime-owned via ToolRegistry.
+
+    Database flags (is_mutation, idempotent) cannot be trusted blindly:
+    - Unknown tools missing from ToolRegistry MUST default to NEEDS_REVIEW.
+    - Non-READ_ONLY tools with forged DB flags MUST default to NEEDS_REVIEW.
+    - Only registered READ_ONLY tools with valid flags are SAFE_TO_RESUME.
+    """
+    db1 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db1.get_connection())
+    session_repo = SessionRepository(db1)
+    task_repo = TaskRepository(db1)
+    tool_repo = ToolExecutionRepository(db1)
+
+    session = session_repo.create_session(title="Tool Trust Session")
+
+    # Task 1: in-flight registered read_file
+    t1 = task_repo.create_task(prompt="Task 1", session_id=session.id)
+    task_repo.transition_task_state(t1.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    tool_repo.record_started(
+        task_id=t1.id,
+        call_id="call-t1-1",
+        tool_name="read_file",
+        arguments={"path": "a.txt"},
+        is_mutation=False,
+        idempotent=True,
+    )
+
+    # Task 2: in-flight UNREGISTERED external tool where DB record claims is_mutation=0, idempotent=1
+    t2 = task_repo.create_task(prompt="Task 2", session_id=session.id)
+    task_repo.transition_task_state(t2.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    tool_repo.record_started(
+        task_id=t2.id,
+        call_id="call-t2-1",
+        tool_name="unregistered_mcp_custom_tool",
+        arguments={"action": "query"},
+        is_mutation=False,
+        idempotent=True,
+    )
+
+    # Task 3: in-flight mutating tool where DB record falsely claims is_mutation=0, idempotent=1
+    t3 = task_repo.create_task(prompt="Task 3", session_id=session.id)
+    task_repo.transition_task_state(t3.id, to_status=TaskStatus.EXECUTING, expected_version=1)
+    tool_repo.record_started(
+        task_id=t3.id,
+        call_id="call-t3-1",
+        tool_name="execute_command",
+        arguments={"command": "npm install"},
+        is_mutation=False,  # Forged or corrupted DB flag!
+        idempotent=True,
+    )
+    db1.close()  # Crash
+
+    # Process 2: Setup active ToolRegistry
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="read_file",
+            description="Read workspace file",
+            parameters_schema={"type": "object"},
+            risk_category=ToolRiskCategory.READ_ONLY,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="execute_command",
+            description="Run shell command",
+            parameters_schema={"type": "object"},
+            risk_category=ToolRiskCategory.COMMAND_EXECUTION,
+        )
+    )
+
+    db2 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    recovery = StartupRecoveryEngine(db2, tool_registry=registry)
+    summary = recovery.reconcile()
+
+    assert summary.interrupted_tasks_found == 3
+    assert summary.safe_to_resume_count == 1
+    assert summary.needs_review_count == 2
+
+    task_repo2 = TaskRepository(db2)
+    # Task 1: registered READ_ONLY -> SAFE_TO_RESUME
+    assert task_repo2.get(t1.id).recovery_status == RecoveryStatus.INTERRUPTED_SAFE
+    # Task 2: unregistered tool -> NEEDS_REVIEW (fail-closed!)
+    assert task_repo2.get(t2.id).recovery_status == RecoveryStatus.NEEDS_REVIEW
+    # Task 3: non-READ_ONLY tool -> NEEDS_REVIEW (DB false flag overridden!)
+    assert task_repo2.get(t3.id).recovery_status == RecoveryStatus.NEEDS_REVIEW
+    db2.close()
+
+
+def test_recovery_all_five_approval_states_on_restart(disk_db_path: Path) -> None:
+    """Verify F7-06: Process restart behavior across all 5 approval lifecycle states.
+
+    Per 2604.14228v3.pdf §5 and §9.2:
+    - pending -> expired
+    - approved (unconsumed) -> expired (authorizations do NOT survive process restart!)
+    - consumed -> consumed (terminal, preserved)
+    - denied -> denied (terminal, preserved)
+    - expired -> expired (terminal, preserved)
+    - consume_token fails on authorizations that were invalidated to expired
+    """
+    db1 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    MigrationRunner.apply_all(db1.get_connection())
+    session_repo = SessionRepository(db1)
+    task_repo = TaskRepository(db1)
+    approval_repo = ApprovalRepository(db1)
+
+    session = session_repo.create_session(title="Approval States Session")
+    task = task_repo.create_task(prompt="Approval test", session_id=session.id)
+
+    # 1. Pending approval
+    app_pending = approval_repo.create_request(task_id=task.id, action="cmd_pending", action_summary="Pending")
+
+    # 2. Approved but UNCONSUMED approval
+    app_approved = approval_repo.create_request(task_id=task.id, action="cmd_approved", action_summary="Approved unconsumed")
+    approval_repo.resolve(call_id=app_approved.call_id, status=ApprovalStatus.APPROVED, decision_reason="Operator approved")
+
+    # 3. Consumed approval
+    app_consumed = approval_repo.create_request(task_id=task.id, action="cmd_consumed", action_summary="Consumed")
+    approval_repo.resolve(call_id=app_consumed.call_id, status=ApprovalStatus.APPROVED, decision_reason="Operator approved")
+    assert approval_repo.consume_token(app_consumed.call_id) is True
+
+    # 4. Denied approval
+    app_denied = approval_repo.create_request(task_id=task.id, action="cmd_denied", action_summary="Denied")
+    approval_repo.resolve(call_id=app_denied.call_id, status=ApprovalStatus.DENIED, decision_reason="Operator rejected")
+
+    # 5. Already expired approval
+    app_expired = approval_repo.create_request(task_id=task.id, action="cmd_expired", action_summary="Expired")
+    approval_repo.resolve(call_id=app_expired.call_id, status=ApprovalStatus.EXPIRED, decision_reason="Timed out")
+
+    db1.close()  # Sudden crash / restart
+
+    # Process 2: boots and runs reconciliation
+    db2 = DatabaseManager(db_path=str(disk_db_path), enable_wal=True)
+    recovery = StartupRecoveryEngine(db2)
+    summary = recovery.reconcile()
+
+    # 2 stale authorizations invalidated: 1 pending + 1 approved-unconsumed
+    assert summary.stale_approvals_invalidated == 2
+
+    approval_repo2 = ApprovalRepository(db2)
+
+    # 1. Pending -> Expired
+    assert approval_repo2.get_by_call_id(app_pending.call_id).status == ApprovalStatus.EXPIRED
+
+    # 2. Approved unconsumed -> Expired!
+    assert approval_repo2.get_by_call_id(app_approved.call_id).status == ApprovalStatus.EXPIRED
+
+    # 3. Consumed remains Consumed
+    assert approval_repo2.get_by_call_id(app_consumed.call_id).status == ApprovalStatus.CONSUMED
+
+    # 4. Denied remains Denied
+    assert approval_repo2.get_by_call_id(app_denied.call_id).status == ApprovalStatus.DENIED
+
+    # 5. Expired remains Expired
+    assert approval_repo2.get_by_call_id(app_expired.call_id).status == ApprovalStatus.EXPIRED
+
+    # Verify consume_token on the previously approved (now expired) grant returns False
+    assert approval_repo2.consume_token(app_approved.call_id) is False
+
     db2.close()

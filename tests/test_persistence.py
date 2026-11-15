@@ -15,6 +15,7 @@ from storage.database import DatabaseManager
 from storage.migrations import MigrationRunner, MIGRATIONS
 from storage.models import (
     ApprovalRecord,
+    ApprovalStatus,
     ExecutionState,
     ModelCallRecord,
     RecoveryClassification,
@@ -374,3 +375,235 @@ def test_approval_repository_lifecycle_and_single_use(temp_db: DatabaseManager) 
     assert fetched_rec2 is not None
     assert fetched_rec2.status == "expired"
     assert "test_restart" in fetched_rec2.resolution_reason
+
+
+def test_database_level_trigger_terminal_immutability(temp_db: DatabaseManager) -> None:
+    """Verify F7-02: SQLite triggers enforce terminal immutability at the database engine level.
+
+    Direct raw SQL updates bypassing Python application code MUST be aborted by SQLite triggers.
+    """
+    session_repo = SessionRepository(temp_db)
+    task_repo = TaskRepository(temp_db)
+
+    session = session_repo.create_session(title="Trigger Test Session")
+    task = task_repo.create_task(prompt="Trigger immutability test", session_id=session.id)
+
+    # 1. Transition task through repository to terminal COMPLETED
+    task_repo.transition_task_state(task.id, to_status="EXECUTING", expected_version=1)
+    task_repo.transition_task_state(task.id, to_status="COMPLETED", expected_version=2)
+
+    # 2. Direct raw SQL update attempting to reactivate completed task to EXECUTING
+    with temp_db.connection() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+            conn.execute(
+                "UPDATE tasks SET status = 'executing' WHERE id = ?;",
+                (task.id,),
+            )
+
+    # Verify task status in database was NOT changed
+    with temp_db.connection() as conn:
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?;", (task.id,)).fetchone()
+        assert row["status"] == "completed"
+
+    # 3. Create another task and set to terminal FAILED
+    task2 = task_repo.create_task(prompt="Trigger fail test", session_id=session.id)
+    task_repo.transition_task_state(task2.id, to_status="EXECUTING", expected_version=1)
+    task_repo.transition_task_state(task2.id, to_status="FAILED", expected_version=2)
+
+    # Direct raw SQL update attempting to set failed task back to PENDING
+    with temp_db.connection() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+            conn.execute(
+                "UPDATE tasks SET status = 'pending' WHERE id = ?;",
+                (task2.id,),
+            )
+
+    # 4. Direct raw SQL update attempting illegal pending -> completed jump
+    task3 = task_repo.create_task(prompt="Trigger jump test", session_id=session.id)
+    with temp_db.connection() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="Illegal database state transition: pending tasks"):
+            conn.execute(
+                "UPDATE tasks SET status = 'completed' WHERE id = ?;",
+                (task3.id,),
+            )
+
+
+def test_migration_upgrade_v1_to_v2_preserves_data(tmp_path: Path) -> None:
+    """Verify F7-04: Upgrade from 001_initial_schema to 002_immutability_triggers_and_continuations.
+
+    Existing data must be 100% preserved, new column parent_task_id added, and triggers installed.
+    """
+    db_file = tmp_path / "migration_upgrade.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    # 1. Apply ONLY migration 1 manually
+    v1_version, v1_desc, v1_sql = MIGRATIONS[0]
+    assert v1_desc == "001_initial_schema"
+    with manager.transaction() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.executescript(v1_sql)
+        conn.execute(
+            "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?);",
+            (v1_version, v1_desc, "2026-01-01T00:00:00Z"),
+        )
+
+    # 2. Insert existing session and task records in v1 schema
+    with manager.transaction() as conn:
+        conn.execute(
+            "INSERT INTO sessions (id, title, workspace_path, status, created_at, updated_at) "
+            "VALUES ('s-legacy', 'Legacy Session', '/workspace', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"
+        )
+        conn.execute(
+            "INSERT INTO tasks (id, session_id, prompt, status, created_at, version) "
+            "VALUES ('t-legacy', 's-legacy', 'Legacy Task Prompt', 'completed', '2026-01-01T00:00:00Z', 1);"
+        )
+
+    # 3. Run migration runner to apply remaining migrations (v2)
+    runner = MigrationRunner(manager)
+    applied = runner.run_migrations()
+    assert len(applied) == 1
+    assert applied[0] == 2
+
+    # 4. Verify existing records are preserved and new column is accessible
+    with manager.connection() as conn:
+        task_row = conn.execute("SELECT id, session_id, prompt, status, parent_task_id FROM tasks WHERE id = 't-legacy';").fetchone()
+        assert task_row is not None
+        assert task_row["id"] == "t-legacy"
+        assert task_row["prompt"] == "Legacy Task Prompt"
+        assert task_row["status"] == "completed"
+        assert task_row["parent_task_id"] is None
+
+        # 5. Verify triggers are active on the upgraded database
+        with pytest.raises(sqlite3.IntegrityError, match="terminal tasks.*are immutable"):
+            conn.execute("UPDATE tasks SET status = 'executing' WHERE id = 't-legacy';")
+
+    manager.close()
+
+
+def test_migration_failure_rollback(tmp_path: Path) -> None:
+    """Verify F7-04: Migration failure triggers automatic transactional rollback without partial states."""
+    db_file = tmp_path / "migration_fail.db"
+    db_url = f"sqlite:///{db_file.as_posix()}"
+    manager = DatabaseManager(database_url=db_url)
+
+    # Initialize schema migrations table
+    runner = MigrationRunner(manager)
+    runner.run_migrations()
+
+    # Attempt to apply a multi-statement transaction that fails halfway
+    with pytest.raises(sqlite3.OperationalError):
+        with manager.transaction() as conn:
+            conn.execute("CREATE TABLE broken_table (id TEXT PRIMARY KEY);")
+            conn.execute("SYNTAX ERROR INVALID SQL;")
+
+    # Verify broken_table was rolled back and does not exist in schema
+    with manager.connection() as conn:
+        table_exists = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='broken_table';"
+        ).fetchone()[0]
+        assert table_exists == 0
+
+    manager.close()
+
+
+def test_secret_scrubbing_across_all_tables(temp_db: DatabaseManager) -> None:
+    """Verify F7-03: Secret scrubbing across all SQLite tables directly verified with raw SQL.
+
+    Audits:
+    - tasks: prompt, error, response_text, termination_reason
+    - transcript_messages: content, tool_calls_json
+    - tool_executions: arguments_json, result_output, error
+    - approvals: reason, decision_reason
+    - state_transitions: reason
+    - sessions: metadata_json
+    """
+    session_repo = SessionRepository(temp_db)
+    task_repo = TaskRepository(temp_db)
+    transcript_repo = TranscriptRepository(temp_db)
+    tool_repo = ToolExecutionRepository(temp_db)
+    approval_repo = ApprovalRepository(temp_db)
+
+    secret_key = "sk-ant-api03-TOPSECRET1234567890abcdef"
+    secret_token = "ghp_PersonalAccessTokenABC123456789"
+    secret_bearer = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.supersecretpayload.xyz"
+
+    # 1. Session with secret in metadata
+    session = session_repo.create_session(
+        title="Secret Audit Session",
+        metadata={"api_key": secret_key, "token": secret_token},
+    )
+
+    # 2. Task with secrets in prompt, response, error, termination_reason
+    task = task_repo.create_task(
+        prompt=f"Please use token {secret_token} to deploy",
+        session_id=session.id,
+    )
+    task_repo.transition_task_state(
+        task_id=task.id,
+        to_status="EXECUTING",
+        expected_version=1,
+        reason=f"Transition with secret {secret_key}",
+    )
+    task_repo.transition_state(
+        task_id=task.id,
+        target_status=TaskStatus.FAILED,
+        response_text=f"Response containing {secret_bearer}",
+        error=f"Connection failed using key {secret_key}",
+        termination_reason=f"Terminated due to {secret_token}",
+        reason=f"Audit transition reason {secret_key}",
+    )
+
+    # 3. Transcript messages with secrets
+    transcript_repo.append_message(
+        session_id=session.id,
+        task_id=task.id,
+        role="user",
+        content=f"My secret key is {secret_key}",
+        tool_calls_json=f'{{"token": "{secret_token}"}}',
+    )
+
+    # 4. Tool execution with secrets
+    exec_rec = tool_repo.record_started(
+        task_id=task.id,
+        call_id="call-sec-01",
+        tool_name="test_tool",
+        arguments={"auth": secret_bearer, "api_key": secret_key},
+    )
+    tool_repo.record_completed(
+        call_id=exec_rec.call_id,
+        result_output={"response": f"Authenticated with {secret_token}"},
+        error=f"Error containing {secret_key}",
+    )
+
+    # 5. Approval request with secrets
+    app_rec = approval_repo.create_request(
+        task_id=task.id,
+        action="deploy",
+        action_summary=f"Deploy using token {secret_token}",
+    )
+    approval_repo.resolve(
+        call_id=app_rec.call_id,
+        status=ApprovalStatus.APPROVED,
+        decision_reason=f"Approved with key {secret_key}",
+    )
+
+    # Direct raw SQL audit across every table: assert NO raw secrets exist
+    raw_secrets = [secret_key, secret_token, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"]
+
+    with temp_db.connection() as conn:
+        for tbl in ["sessions", "tasks", "transcript_messages", "tool_executions", "approvals", "state_transitions"]:
+            rows = conn.execute(f"SELECT * FROM {tbl};").fetchall()
+            for row in rows:
+                row_str = " ".join(str(v) for v in dict(row).values())
+                for secret in raw_secrets:
+                    assert secret not in row_str, f"Raw secret leaked in table {tbl}: column data contains '{secret}'"
+

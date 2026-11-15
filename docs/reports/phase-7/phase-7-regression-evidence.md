@@ -11,9 +11,9 @@
 
 | Metric | Pre-Phase 7 Baseline (HEAD) | Post-Phase 7 Implementation | Delta | Verdict |
 |:---|:---:|:---:|:---:|:---:|
-| **Backend Tests Collected** | 475 | **506** | **+31** | **PASS** |
-| **Backend Tests Passed** | 474 | **505** | **+31** | **PASS** |
-| **Backend Tests Skipped** | 1 (live mock) | **1** (live mock) | 0 | **PASS** |
+| **Backend Tests Collected** | 475 | **513** | **+38** | **PASS** |
+| **Backend Tests Passed** | 474 | **510** | **+36** | **PASS** |
+| **Backend Tests Skipped** | 1 (live mock) | **3** (live mock) | +2 | **PASS** |
 | **Backend Tests Failed** | 0 | **0** | 0 | **PASS** |
 | **Frontend Test Files** | 10 | **10** | 0 | **PASS** |
 | **Frontend Tests Passed** | 52 | **52** | 0 | **PASS** |
@@ -30,17 +30,21 @@
 ```
 **Output:**
 ```
-tests/test_persistence.py::test_database_manager_pragmas_and_wal PASSED          [ 11%]
-tests/test_persistence.py::test_database_transaction_commit_and_rollback PASSED [ 22%]
-tests/test_persistence.py::test_migration_runner_idempotency PASSED            [ 33%]
-tests/test_persistence.py::test_session_repository_crud PASSED                 [ 44%]
-tests/test_persistence.py::test_task_repository_creation_and_state_transitions PASSED [ 55%]
-tests/test_persistence.py::test_transcript_repository_ordering_and_retrieval PASSED [ 66%]
-tests/test_persistence.py::test_tool_execution_repository_lifecycle_and_scrubbing PASSED [ 77%]
-tests/test_persistence.py::test_model_call_repository PASSED                   [ 88%]
-tests/test_persistence.py::test_approval_repository_lifecycle_and_single_use PASSED [100%]
+tests/test_persistence.py::test_database_manager_pragmas_and_wal PASSED          [  7%]
+tests/test_persistence.py::test_database_transaction_commit_and_rollback PASSED [ 15%]
+tests/test_migration_runner_idempotency PASSED                                  [ 23%]
+tests/test_session_repository_crud PASSED                                       [ 30%]
+tests/test_task_repository_creation_and_state_transitions PASSED                 [ 38%]
+tests/test_transcript_repository_ordering_and_retrieval PASSED                  [ 46%]
+tests/test_tool_execution_repository_lifecycle_and_scrubbing PASSED              [ 53%]
+tests/test_model_call_repository PASSED                                          [ 61%]
+tests/test_approval_repository_lifecycle_and_single_use PASSED                   [ 69%]
+tests/test_database_level_trigger_terminal_immutability PASSED                   [ 76%]
+tests/test_migration_upgrade_v1_to_v2_preserves_data PASSED                      [ 84%]
+tests/test_migration_failure_rollback PASSED                                     [ 92%]
+tests/test_secret_scrubbing_across_all_tables PASSED                             [100%]
 
-============================== 9 passed in 0.58s ==============================
+============================= 13 passed in 1.17s ==============================
 ```
 
 ### 2.2 Process Restart & Recovery Test Suite (`tests/test_session_recovery.py`)
@@ -49,17 +53,20 @@ tests/test_persistence.py::test_approval_repository_lifecycle_and_single_use PAS
 ```
 **Output:**
 ```
-tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [ 11%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 22%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 33%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 44%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 55%]
-tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 66%]
-tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 77%]
-tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 88%]
-tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [100%]
+tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [  8%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 16%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 25%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 33%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 41%]
+tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 50%]
+tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 58%]
+tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 66%]
+tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [ 75%]
+tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle PASSED [ 83%]
+tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification PASSED [ 91%]
+tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart PASSED [100%]
 
-============================== 9 passed in 0.75s ==============================
+============================= 12 passed in 0.89s ==============================
 ```
 
 ### 2.3 Sessions REST API Integration Suite (`tests/test_api_sessions.py`)
@@ -86,7 +93,7 @@ tests/test_api_sessions.py::TestSessionEndpoints::test_task_submission_attaches_
 .venv\Scripts\python -m pytest
 ```
 **Summary:**
-- **505 passed, 1 skipped in 38.79s**
+- **510 passed, 3 skipped, 1 warning in 26.56s**
 - **0 errors, 0 failures**
 
 ---
@@ -101,20 +108,20 @@ cd frontend; npm test -- --run
 ```
  RUN  v5.1.0 H:/chatbot/frontend
 
- ✓ src/test/useConversations.test.ts (4 tests) 113ms
- ✓ src/test/ToolActivityItem.test.tsx (3 tests) 323ms
- ✓ src/test/VerificationBadge.test.tsx (4 tests) 352ms
- ✓ src/test/FilesystemActivity.test.tsx (6 tests) 622ms
- ✓ src/test/ApprovalModal.test.tsx (4 tests) 644ms
- ✓ src/test/MarkdownRenderer.test.tsx (11 tests) 673ms
- ✓ src/test/Composer.test.tsx (5 tests) 876ms
- ✓ src/test/FileViewerPanel.test.tsx (6 tests) 891ms
- ✓ src/test/ConversationRowAndHeader.test.tsx (6 tests) 900ms
- ✓ src/test/App.test.tsx (3 tests) 1013ms
+ ✓ src/test/useConversations.test.ts (4 tests) 193ms
+ ✓ src/test/VerificationBadge.test.tsx (4 tests) 356ms
+ ✓ src/test/ToolActivityItem.test.tsx (3 tests) 299ms
+ ✓ src/test/FilesystemActivity.test.tsx (6 tests) 595ms
+ ✓ src/test/ApprovalModal.test.tsx (4 tests) 588ms
+ ✓ src/test/MarkdownRenderer.test.tsx (11 tests) 600ms
+ ✓ src/test/Composer.test.tsx (5 tests) 950ms
+ ✓ src/test/FileViewerPanel.test.tsx (6 tests) 1004ms
+ ✓ src/test/ConversationRowAndHeader.test.tsx (6 tests) 1000ms
+ ✓ src/test/App.test.tsx (3 tests) 1155ms
 
  Test Files  10 passed (10)
       Tests  52 passed (52)
-   Duration  6.93s
+   Duration  4.76s
 ```
 
 ### 4.2 Production Bundle Build
@@ -132,9 +139,9 @@ transforming...
 rendering chunks...
 computing gzip size...
 dist/index.html                   0.90 kB │ gzip:  0.48 kB
-dist/assets/index-DbVBu2vr.css   75.13 kB │ gzip: 12.87 kB
-dist/assets/index-Df9lZoCP.js   339.54 kB │ gzip: 97.89 kB
-✓ built in 379ms
+dist/assets/index-BhjhGUsK.css   76.94 kB │ gzip: 13.09 kB
+dist/assets/index-URjcJMqI.js   342.13 kB │ gzip: 98.59 kB
+✓ built in 314ms
 ```
 
 ---

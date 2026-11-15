@@ -86,10 +86,31 @@ export const FileViewerPanel: React.FC<FileViewerPanelProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isPickerOpen, setIsPickerOpen] = useState(false)
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false)
+  const [isFitToScreen, setIsFitToScreen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('chatbot_file_viewer_fit_to_screen')
+      if (saved !== null) return saved === 'true'
+    } catch {
+      // Ignore localStorage access failures
+    }
+    return true // Default true so code lines wrap and fit to screen without horizontal overflow
+  })
   const [availableDocs, setAvailableDocs] = useState<{ path: string; name: string }[]>([])
   const [isLoadingFile, setIsLoadingFile] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
+
+  const handleToggleFitToScreen = () => {
+    setIsFitToScreen((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem('chatbot_file_viewer_fit_to_screen', String(next))
+      } catch {
+        // Ignore localStorage access failures
+      }
+      return next
+    })
+  }
 
   // Draggable width state (Antigravity-style split pane)
   const MIN_PANEL_WIDTH = 360

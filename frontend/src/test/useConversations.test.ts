@@ -7,10 +7,10 @@ describe('useConversations Hook', () => {
     localStorage.clear()
   })
 
-  it('initializes with a default project and conversation', () => {
+  it('initializes with a default conversation and projects list', () => {
     const { result } = renderHook(() => useConversations())
 
-    expect(result.current.projects.length).toBeGreaterThan(0)
+    expect(Array.isArray(result.current.projects)).toBe(true)
     expect(result.current.conversations.length).toBeGreaterThan(0)
     expect(result.current.activeConversationId).toBeDefined()
   })
