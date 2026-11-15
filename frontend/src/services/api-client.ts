@@ -100,7 +100,7 @@ export const apiClient = {
   /**
    * Submit a user prompt to the backend task execution pipeline.
    */
-  async submitTask(request: TaskCreateRequest): Promise<TaskResponse> {
+  async submitTask(request: TaskCreateRequest, signal?: AbortSignal): Promise<TaskResponse> {
     try {
       const res = await fetch(`${API_BASE_URL}/api/tasks`, {
         method: 'POST',
@@ -109,6 +109,7 @@ export const apiClient = {
           Accept: 'application/json',
         },
         body: JSON.stringify(request),
+        signal,
       })
       const body = await parseResponseBody(res)
       if (!res.ok) {

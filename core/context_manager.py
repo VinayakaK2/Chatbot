@@ -29,7 +29,10 @@ from core.context_models import (
     OutputBudgetExceededError,
 )
 from core.message_models import AgentMessage, AgentMessageRole, ToolCallRecord
-from tools.shell import redact_secrets
+try:
+    from tools.security import redact_secrets
+except ImportError:
+    from tools.shell import redact_secrets
 
 logger = logging.getLogger("agent_runtime.core.context")
 
@@ -124,6 +127,51 @@ def bound_text_content(
         )
 
     return bounded, True, orig_len
+
+
+def compact_tool_calls_for_history(
+    tool_calls: Optional[List[ToolCallRecord]],
+    max_content_chars: int = 250,
+) -> Optional[List[ToolCallRecord]]:
+    """Compact redundant large file payloads in historical assistant tool calls to prevent context explosion.
+
+    When an assistant writes or edits a large file (e.g. 20KB CSS/JS), the entire file body remains in the assistant's
+    tool call arguments. In subsequent turns, once the file is verified on disk, re-sending the full file payload in every
+    prior turn bloats prompt tokens by 10x-20x. This helper preserves the function schema contract, path, and tool identity
+    while substituting a compact confirmation indicator for the bulk content.
+    """
+    if not tool_calls:
+        return None
+    compacted: List[ToolCallRecord] = []
+    for tc in tool_calls:
+        raw_args = tc.raw_arguments or "{}"
+        try:
+            parsed = json.loads(raw_args)
+            modified = False
+
+            # Compact write_file content in historical turns
+            if tc.name == "write_file" and "content" in parsed and isinstance(parsed["content"], str):
+                orig_len = len(parsed["content"])
+                if orig_len > max_content_chars:
+                    path = parsed.get("path", "file")
+                    parsed["content"] = f"[Content already written to {path} ({orig_len} chars preserved on disk)]"
+                    modified = True
+
+            # Compact edit_file new_content in historical turns
+            elif tc.name == "edit_file" and "new_content" in parsed and isinstance(parsed["new_content"], str):
+                orig_len = len(parsed["new_content"])
+                if orig_len > max_content_chars:
+                    path = parsed.get("path", "file")
+                    parsed["new_content"] = f"[Replacement already applied to {path} ({orig_len} chars preserved on disk)]"
+                    modified = True
+
+            if modified:
+                compacted.append(ToolCallRecord(id=tc.id, name=tc.name, raw_arguments=json.dumps(parsed)))
+            else:
+                compacted.append(tc)
+        except Exception:
+            compacted.append(tc)
+    return compacted
 
 
 class ContextManager:
@@ -291,19 +339,30 @@ class ContextManager:
                     metadata=meta,
                 )
 
+            # Compact large file write/edit tool call arguments in older historical turns
+            effective_tcs = msg.tool_calls
+            if msg.role == AgentMessageRole.ASSISTANT and msg.tool_calls:
+                if not is_recent:
+                    effective_tcs = compact_tool_calls_for_history(msg.tool_calls)
+
+            # Estimate tokens including tool-call arguments for assistant messages
+            chars_for_tokens = len(bounded_content)
+            if effective_tcs:
+                chars_for_tokens += sum(len(tc.raw_arguments or "") for tc in effective_tcs)
+
             item = ContextItem(
                 id=f"{task_id}_hist_{idx}_{msg.role.value}",
                 category=category,
                 content=bounded_content,
                 priority=prio,
                 is_mandatory=False,
-                estimated_tokens=estimate_tokens(bounded_content),
+                estimated_tokens=estimate_tokens("x" * chars_for_tokens),
                 source_id=msg.tool_call_id,
                 metadata={
                     "history_index": idx,
                     "role": msg.role.value,
                     "name": msg.name,
-                    "tool_calls": [tc.model_dump() for tc in msg.tool_calls] if msg.tool_calls else None,
+                    "tool_calls": [tc.model_dump() for tc in effective_tcs] if effective_tcs else None,
                 },
                 truncated=was_truncated,
                 original_length=orig_len,

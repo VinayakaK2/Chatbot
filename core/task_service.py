@@ -546,7 +546,7 @@ class TaskService:
 
     async def submit_task(self, request: TaskCreateRequest) -> TaskResponse:
         """Submit a prompt and process execution via the agent execution loop."""
-        task_id = str(uuid.uuid4())
+        task_id = getattr(request, "task_id", None) or str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         correlation_id = getattr(request, "correlation_id", None) or get_correlation_id()
 
@@ -712,15 +712,32 @@ class TaskService:
             or DEFAULT_SYSTEM_PROMPT
         )
 
+        # Dynamic task limits resolution (request overrides -> server defaults -> automatic scaling)
+        effective_max_iterations = (
+            getattr(request, "max_iterations", None)
+            if getattr(request, "max_iterations", None) is not None
+            else self.settings.agent_max_iterations
+        )
+        effective_max_tool_calls = (
+            getattr(request, "max_tool_calls", None)
+            if getattr(request, "max_tool_calls", None) is not None
+            else max(self.settings.agent_max_tool_calls, effective_max_iterations * 3)
+        )
+        effective_task_timeout = (
+            getattr(request, "task_timeout_seconds", None)
+            if getattr(request, "task_timeout_seconds", None) is not None
+            else self.settings.agent_task_timeout_seconds
+        )
+
         exec_request = AgentExecutionRequest(
             task_id=task_id,
             prompt=request.prompt,
             system_prompt=effective_system_prompt,
-            max_iterations=self.settings.agent_max_iterations,
-            max_tool_calls=self.settings.agent_max_tool_calls,
+            max_iterations=effective_max_iterations,
+            max_tool_calls=effective_max_tool_calls,
             max_tokens=request.max_tokens or 16384,
             temperature=request.temperature if request.temperature is not None else 0.2,
-            task_timeout_seconds=self.settings.agent_task_timeout_seconds,
+            task_timeout_seconds=effective_task_timeout,
             tool_timeout_seconds=self.settings.agent_tool_timeout_seconds,
             model_timeout_seconds=self.settings.agent_model_timeout_seconds,
             max_model_retries=self.settings.agent_model_max_retries,

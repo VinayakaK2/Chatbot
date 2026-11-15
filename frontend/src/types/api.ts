@@ -35,6 +35,7 @@ export type TaskStatusType = 'pending' | 'executing' | 'completed' | 'failed' | 
 
 export interface TaskCreateRequest {
   prompt: string
+  task_id?: string
   max_tokens?: number
   temperature?: number
 }

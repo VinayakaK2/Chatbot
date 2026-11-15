@@ -154,6 +154,14 @@ async def stream_task_events(
     """Stream live execution events for a task over SSE."""
     task = task_service.get_task(task_id)
     if not task:
+        # Allow short wait in case client SSE stream connects concurrently with task submission
+        for _ in range(15):
+            await asyncio.sleep(0.2)
+            task = task_service.get_task(task_id)
+            if task:
+                break
+
+    if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task with ID '{task_id}' not found.",

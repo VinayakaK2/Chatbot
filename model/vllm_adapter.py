@@ -28,7 +28,7 @@ class VLLMAdapter(ModelProvider):
         base_url: str,
         model_name: str,
         api_key: Optional[SecretStr | str] = None,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 180.0,
         max_retries: int = 2,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:

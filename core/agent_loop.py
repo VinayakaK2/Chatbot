@@ -112,15 +112,15 @@ class AgentExecutionRequest(BaseModel):
         description="Prior conversation history if resuming or multi-turn",
     )
     max_iterations: int = Field(
-        default=20,
+        default=100,
         ge=1,
-        le=100,
+        le=1000,
         description="Maximum multi-turn loop iterations allowed",
     )
     max_tool_calls: int = Field(
-        default=50,
+        default=300,
         ge=1,
-        le=200,
+        le=3000,
         description="Maximum total tool calls permitted across the task",
     )
     max_tokens: int = Field(
@@ -136,9 +136,9 @@ class AgentExecutionRequest(BaseModel):
         description="Sampling temperature",
     )
     task_timeout_seconds: float = Field(
-        default=300.0,
+        default=1800.0,
         gt=0.0,
-        le=1800.0,
+        le=14400.0,
         description="Wall-clock execution ceiling for the entire task",
     )
     tool_timeout_seconds: float = Field(
@@ -164,7 +164,7 @@ class AgentExecutionRequest(BaseModel):
         description="Root or current trace correlation ID",
     )
     model_timeout_seconds: float = Field(
-        default=60.0,
+        default=180.0,
         gt=0.0,
         le=600.0,
         description="Wall-clock timeout for individual upstream model completion requests",
@@ -549,16 +549,33 @@ class AgentLoop:
             retry_policy = RetryPolicy(max_retries=request.max_model_retries)
 
             async def _invoke_model_provider() -> ModelResponse:
-                return await asyncio.wait_for(
-                    self.model_provider.generate(
-                        prompt=request.prompt,
-                        max_tokens=request.max_tokens,
-                        temperature=request.temperature,
-                        messages=assembled_messages,
-                        tools=tool_schemas if tool_schemas else None,
-                    ),
-                    timeout=request.model_timeout_seconds,
+                model_coro = self.model_provider.generate(
+                    prompt=request.prompt,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                    messages=assembled_messages,
+                    tools=tool_schemas if tool_schemas else None,
                 )
+                if not request.cancellation_token:
+                    return await asyncio.wait_for(model_coro, timeout=request.model_timeout_seconds)
+
+                model_task = asyncio.create_task(model_coro)
+                cancel_waiter = asyncio.create_task(request.cancellation_token.wait())
+                done, pending = await asyncio.wait(
+                    [model_task, cancel_waiter],
+                    timeout=request.model_timeout_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+
+                if request.cancellation_token.is_set():
+                    model_task.cancel()
+                    raise asyncio.CancelledError("Task was cancelled by user.")
+                if model_task in done:
+                    return await model_task
+                model_task.cancel()
+                raise asyncio.TimeoutError()
 
             def _on_retry_handler(attempt: int, err: Exception, cat: FailureCategory, delay: float) -> None:
                 nonlocal retries_attempted
@@ -574,6 +591,27 @@ class AgentLoop:
                     _invoke_model_provider,
                     is_idempotent=True,
                     on_retry=_on_retry_handler,
+                    cancellation_token=request.cancellation_token,
+                )
+            except asyncio.CancelledError:
+                logger.info("Task %s model call cancelled via cancellation token", request.task_id)
+                self._emit_event(
+                    request,
+                    RuntimeEventType.TASK_CANCELLED,
+                    {"iteration": iterations, "reason": "cancelled_during_model_call"},
+                )
+                return AgentExecutionResult(
+                    task_id=request.task_id,
+                    status=TaskStatus.CANCELLED,
+                    final_response=None,
+                    iterations=iterations,
+                    tool_calls_count=total_tool_calls,
+                    history=history,
+                    model=last_model_id,
+                    usage=accumulated_usage,
+                    error="Task was cancelled by user.",
+                    correlation_id=effective_cid,
+                    termination_reason="cancelled",
                 )
             except asyncio.TimeoutError:
                 logger.error("Model request timed out on turn %d (%.1fs limit)", iterations, request.model_timeout_seconds)

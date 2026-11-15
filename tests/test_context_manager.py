@@ -335,3 +335,60 @@ class TestSummaryProvenance:
         assert "sum_42" in summary_msgs[0].content
         assert summary.text in summary_msgs[0].content
         assert res.diagnostics.items_included_count >= 2
+
+
+class TestToolCallCompaction:
+    """Verifies that large file payload arguments in historical assistant tool calls are compacted to prevent context bloat."""
+
+    def test_large_write_file_payload_is_compacted_in_older_history(self) -> None:
+        import json
+        from core.message_models import ToolCallRecord
+
+        mgr = ContextManager()
+        # Budget configured with max_recent_messages=2 so older messages get compacted
+        budget = ContextBudgetConfig(max_recent_messages=2)
+
+        huge_css = "/* CSS Rule */\n.btn { color: red; }\n" * 100
+        old_assistant = AgentMessage.create_assistant(
+            content="Writing styles",
+            tool_calls=[
+                ToolCallRecord(
+                    id="call_write_1",
+                    name="write_file",
+                    raw_arguments=json.dumps({"path": "css/styles.css", "content": huge_css}),
+                )
+            ],
+        )
+        old_tool = AgentMessage(
+            role=AgentMessageRole.TOOL,
+            content='{"status":"success","bytes_written":3000}',
+            name="write_file",
+            tool_call_id="call_write_1",
+        )
+        recent_assistant = AgentMessage.create_assistant(content="Done with styles.")
+        recent_user = AgentMessage.create_user("Next step?")
+
+        hist = [old_assistant, old_tool, recent_assistant, recent_user]
+
+        res = mgr.assemble_context(
+            task_id="task_compact_1",
+            user_prompt="Now build html",
+            history=hist,
+            budget_config=budget,
+        )
+
+        # Find the wire message corresponding to old_assistant
+        wire_assistants = [m for m in res.messages if m.role == AgentMessageRole.ASSISTANT and m.tool_calls]
+        assert len(wire_assistants) == 1
+        tc = wire_assistants[0].tool_calls[0]
+        parsed_args = json.loads(tc.raw_arguments)
+
+        # Verify bulk content was compacted into a confirmation indicator preserving path and length
+        assert "Content already written to css/styles.css" in parsed_args["content"]
+        assert len(parsed_args["content"]) < 200
+        assert parsed_args["path"] == "css/styles.css"
+
+        # Verify original message object was NOT mutated
+        orig_parsed = json.loads(old_assistant.tool_calls[0].raw_arguments)
+        assert orig_parsed["content"] == huge_css
+

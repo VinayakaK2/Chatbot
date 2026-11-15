@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_MAX_PROMPT_LENGTH: int = 32_768
 
 # Default timeout in seconds for upstream model API calls
-DEFAULT_MODEL_TIMEOUT_SECONDS: float = 60.0
+DEFAULT_MODEL_TIMEOUT_SECONDS: float = 180.0
 
 # Maximum allowed model retries for transient upstream failures
 DEFAULT_MODEL_MAX_RETRIES: int = 2
@@ -76,12 +76,12 @@ class Settings(BaseSettings):
         description="Maximum accepted character count for user prompts",
     )
     agent_max_iterations: int = Field(
-        default=20,
+        default=100,
         validation_alias="AGENT_MAX_ITERATIONS",
         description="Upper bound on multi-turn model interaction cycles per task",
     )
     agent_max_tool_calls: int = Field(
-        default=50,
+        default=300,
         validation_alias="AGENT_MAX_TOOL_CALLS",
         description="Upper bound on total tool invocations per task",
     )
@@ -91,7 +91,7 @@ class Settings(BaseSettings):
         description="Execution timeout in seconds for individual tool calls",
     )
     agent_task_timeout_seconds: float = Field(
-        default=300.0,
+        default=1800.0,
         validation_alias="AGENT_TASK_TIMEOUT_SECONDS",
         description="Overall wall-clock timeout in seconds for agent task completion",
     )
@@ -244,16 +244,16 @@ class Settings(BaseSettings):
     @classmethod
     def validate_max_iterations(cls, v: int) -> int:
         """Ensure max iterations is positive and bounded."""
-        if not (1 <= v <= 100):
-            raise ValueError(f"AGENT_MAX_ITERATIONS must be between 1 and 100, got {v}")
+        if not (1 <= v <= 1000):
+            raise ValueError(f"AGENT_MAX_ITERATIONS must be between 1 and 1000, got {v}")
         return v
 
     @field_validator("agent_max_tool_calls")
     @classmethod
     def validate_max_tool_calls(cls, v: int) -> int:
         """Ensure max tool calls is positive and bounded."""
-        if not (1 <= v <= 200):
-            raise ValueError(f"AGENT_MAX_TOOL_CALLS must be between 1 and 200, got {v}")
+        if not (1 <= v <= 3000):
+            raise ValueError(f"AGENT_MAX_TOOL_CALLS must be between 1 and 3000, got {v}")
         return v
 
     @field_validator("agent_tool_timeout_seconds")
@@ -268,8 +268,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_task_timeout(cls, v: float) -> float:
         """Ensure task timeout is bounded."""
-        if v <= 0.0 or v > 1800.0:
-            raise ValueError(f"AGENT_TASK_TIMEOUT_SECONDS must be between 0.1 and 1800.0, got {v}")
+        if v <= 0.0 or v > 14400.0:
+            raise ValueError(f"AGENT_TASK_TIMEOUT_SECONDS must be between 0.1 and 14400.0, got {v}")
         return v
 
     @property

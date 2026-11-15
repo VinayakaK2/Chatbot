@@ -26,6 +26,9 @@ export function useTaskStream(
   const processedEventIds = useRef<Set<string>>(new Set())
   const isCancelledRef = useRef(false)
   const isStreamingRef = useRef(false)
+  const activeTaskIdRef = useRef<string | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const activeMessageIdRef = useRef<string | null>(null)
 
   const handleEvent = useCallback(
     (messageId: string, event: RuntimeEvent) => {
@@ -174,51 +177,71 @@ export function useTaskStream(
     ) => {
       setIsExecuting(true)
       isCancelledRef.current = false
+      activeMessageIdRef.current = assistantMessageId
       processedEventIds.current.clear()
       const taskStartTime = Date.now()
 
-      try {
-        // Step 1: Submit task through backend API contract
-        const taskResponse: TaskResponse = await apiClient.submitTask({
-          prompt,
-          max_tokens: 16384,
-          temperature: 0.2,
-        })
+      // Generate client-side task ID up front for immediate tracking and cancellation
+      const clientTaskId =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `task-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
-        setActiveTaskId(taskResponse.task_id)
+      setActiveTaskId(clientTaskId)
+      activeTaskIdRef.current = clientTaskId
 
-        // Step 2: Subscribe to live SSE events for this task
-        const unsubscribe = apiClient.subscribeToTaskEvents(
-          taskResponse.task_id,
-          (event) => handleEvent(assistantMessageId, event),
-          () => {
-            if (!isStreamingRef.current) {
-              setIsExecuting(false)
-              setActiveTaskId(null)
-            }
-          },
-          (err) => {
-            console.warn('SSE stream notice:', err.message)
-            if (!isStreamingRef.current) {
-              setIsExecuting(false)
-              setActiveTaskId(null)
-            }
+      const abortController = new AbortController()
+      abortControllerRef.current = abortController
+
+      // Initial setup for message: mark executing so live status and cursor show
+      onUpdateMessage(assistantMessageId, (msg) => ({
+        ...msg,
+        task_id: clientTaskId,
+        status: 'executing',
+        model: modelId,
+        content: '',
+        error: undefined,
+        usage: undefined,
+      }))
+
+      // Step 1: Subscribe to live SSE events immediately for this task ID
+      const unsubscribe = apiClient.subscribeToTaskEvents(
+        clientTaskId,
+        (event) => handleEvent(assistantMessageId, event),
+        () => {
+          if (!isStreamingRef.current && !isCancelledRef.current) {
+            setIsExecuting(false)
+            setActiveTaskId(null)
+            activeTaskIdRef.current = null
           }
+        },
+        (err) => {
+          console.warn('SSE stream notice:', err.message)
+          if (!isStreamingRef.current && !isCancelledRef.current) {
+            setIsExecuting(false)
+            setActiveTaskId(null)
+            activeTaskIdRef.current = null
+          }
+        }
+      )
+      activeUnsubscribeRef.current = unsubscribe
+
+      try {
+        // Step 2: Submit task through backend API contract with clientTaskId and AbortSignal
+        const taskResponse: TaskResponse = await apiClient.submitTask(
+          {
+            prompt,
+            task_id: clientTaskId,
+            max_tokens: 16384,
+            temperature: 0.2,
+          },
+          abortController.signal
         )
-        activeUnsubscribeRef.current = unsubscribe
+
+        // If cancelled while request was in-flight, exit cleanly
+        if (isCancelledRef.current) return
 
         const fullText = taskResponse.response_text || ''
-
-        // Initial setup for message: mark executing so live status and cursor show
-        onUpdateMessage(assistantMessageId, (msg) => ({
-          ...msg,
-          task_id: taskResponse.task_id,
-          status: fullText ? 'executing' : taskResponse.status,
-          model: taskResponse.model || modelId,
-          content: '',
-          error: taskResponse.error || undefined,
-          usage: taskResponse.usage || undefined,
-        }))
 
         // Step 3: Stream tokens continuously with natural, readable pacing
         if (fullText && !taskResponse.error) {
@@ -254,9 +277,10 @@ export function useTaskStream(
         // Finalize message status once streaming is complete
         if (!isCancelledRef.current) {
           const clientDurationSec = Math.max(1, Math.round((Date.now() - taskStartTime) / 1000))
-          const resolvedDuration = (typeof taskResponse.duration_seconds === 'number' && taskResponse.duration_seconds > 0)
-            ? taskResponse.duration_seconds
-            : clientDurationSec
+          const resolvedDuration =
+            typeof taskResponse.duration_seconds === 'number' && taskResponse.duration_seconds > 0
+              ? taskResponse.duration_seconds
+              : clientDurationSec
 
           onUpdateMessage(assistantMessageId, (msg) => ({
             ...msg,
@@ -266,8 +290,16 @@ export function useTaskStream(
           }))
           setIsExecuting(false)
           setActiveTaskId(null)
+          activeTaskIdRef.current = null
         }
       } catch (err) {
+        if (isCancelledRef.current) {
+          // If aborted by user, clean up silently without overriding cancelled status
+          setIsExecuting(false)
+          setActiveTaskId(null)
+          activeTaskIdRef.current = null
+          return
+        }
         isStreamingRef.current = false
         const errorMsg = err instanceof Error ? err.message : 'Task execution failed.'
         const failDurationSec = Math.max(1, Math.round((Date.now() - taskStartTime) / 1000))
@@ -282,6 +314,7 @@ export function useTaskStream(
         }
         setIsExecuting(false)
         setActiveTaskId(null)
+        activeTaskIdRef.current = null
       }
     },
     [handleEvent, onUpdateMessage, onNotify]
@@ -290,27 +323,43 @@ export function useTaskStream(
   const cancelActiveTask = useCallback(async () => {
     isCancelledRef.current = true
     isStreamingRef.current = false
-    if (!activeTaskId) {
-      setIsExecuting(false)
-      return
+    const targetTaskId = activeTaskIdRef.current || activeTaskId
+    const targetMsgId = activeMessageIdRef.current
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
     }
-    try {
-      if (activeUnsubscribeRef.current) {
-        activeUnsubscribeRef.current()
-        activeUnsubscribeRef.current = null
-      }
-      await apiClient.cancelTask(activeTaskId)
-      if (onNotify) {
-        onNotify('Task was cancelled by user.', 'info')
-      }
-    } catch (err) {
-      console.error('Failed to cancel task', err)
-    } finally {
-      setIsExecuting(false)
-      setActiveTaskId(null)
-      setPendingApproval(null)
+
+    if (activeUnsubscribeRef.current) {
+      activeUnsubscribeRef.current()
+      activeUnsubscribeRef.current = null
     }
-  }, [activeTaskId, onNotify])
+
+    if (targetMsgId) {
+      onUpdateMessage(targetMsgId, (msg) => ({
+        ...msg,
+        status: 'cancelled',
+        error: 'Task was cancelled by user.',
+      }))
+    }
+
+    if (targetTaskId) {
+      try {
+        await apiClient.cancelTask(targetTaskId)
+        if (onNotify) {
+          onNotify('Task was cancelled by user.', 'info')
+        }
+      } catch (err) {
+        console.error('Failed to cancel task on backend', err)
+      }
+    }
+
+    setIsExecuting(false)
+    setActiveTaskId(null)
+    activeTaskIdRef.current = null
+    setPendingApproval(null)
+  }, [activeTaskId, onNotify, onUpdateMessage])
 
   const approveTool = useCallback(
     async (callId: string) => {

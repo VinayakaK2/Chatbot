@@ -32,6 +32,24 @@ class TaskCreateRequest(BaseModel):
         le=65536,
         description="Maximum tokens requested from the model",
     )
+    max_iterations: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Dynamic maximum multi-turn iterations allowed for this task (overrides server default)",
+    )
+    max_tool_calls: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=3000,
+        description="Dynamic maximum tool calls allowed for this task (overrides server default)",
+    )
+    task_timeout_seconds: Optional[float] = Field(
+        default=None,
+        ge=1.0,
+        le=14400.0,
+        description="Dynamic overall wall-clock timeout in seconds for this task",
+    )
     temperature: Optional[float] = Field(
         default=0.2,
         ge=0.0,
@@ -53,6 +71,10 @@ class TaskCreateRequest(BaseModel):
     correlation_id: Optional[str] = Field(
         default=None,
         description="Optional root trace correlation ID",
+    )
+    task_id: Optional[str] = Field(
+        default=None,
+        description="Optional client-generated UUID for immediate tracking and cancellation",
     )
 
     @field_validator("prompt")
