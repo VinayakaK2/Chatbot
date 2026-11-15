@@ -65,16 +65,16 @@ flowchart TD
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `tests/test_retries.py` (Work Item 4, Retry-After cap, Backoff cancel) | 11 | 11 | 0 | 0 | **PASS** |
 | `tests/test_loop_detector.py` (Work Item 6, Canonical hashing) | 5 | 5 | 0 | 0 | **PASS** |
-| `tests/test_verification.py` (Work Items 7 & 8, F8-01, F8-02, F8-04) | 11 | 11 | 0 | 0 | **PASS** |
+| `tests/test_verification.py` (Work Items 7 & 8, F8-01, F8-02, F8-04, Auth) | 12 | 12 | 0 | 0 | **PASS** |
 | `tests/test_observability.py` (Work Items 1, 2, 9, F8-03, Pagination) | 8 | 8 | 0 | 0 | **PASS** |
 | `tests/test_cancellation_shutdown.py` (Work Items 3 & 5, Graceful shutdown) | 3 | 3 | 0 | 0 | **PASS** |
 | `tests/test_diagnostics.py` (Work Item 10, Secret masking) | 4 | 4 | 0 | 0 | **PASS** |
-| **Total Dedicated Phase 8 Tests** | **40** | **40** | **0** | **0** | **PASS** |
-| **Full Repository Regression Suite** | **563** | **562** | **0** | **1** | **PASS** |
+| **Total Dedicated Phase 8 Tests** | **43** | **43** | **0** | **0** | **PASS** |
+| **Full Repository Regression Suite** | **564** | **563** | **0** | **1\*** | **PASS** |
 | **Frontend Test Suite (Vitest)** | **59** | **59** | **0** | **0** | **PASS** |
 | **Frontend Production Build (`tsc -b && vite build`)** | **1** | **1** | **0** | **0** | **PASS** |
 
-*Note: The 1 skipped test in backend suite is `tests/test_smoke_live.py` which requires an active external GPU Colab vLLM server.*
+*\*Note on test policies: (1) `tests/test_smoke_live.py` (2 live tests) is explicitly ignored via `--ignore=tests/test_smoke_live.py` as it requires live GPU tunnel connectivity to an external Colab vLLM server. (2) Exactly 1 test within the 564 collected offline suite (`tests/test_workspace_security.py:122`) is skipped on Windows when run without elevated `SeCreateSymbolicLinkPrivilege`.*
 
 ---
 

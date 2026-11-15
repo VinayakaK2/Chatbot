@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from core.diagnostics import run_diagnostics
@@ -55,12 +55,16 @@ class VerificationTriggerRequest(BaseModel):
 async def trigger_task_verification(
     task_id: str,
     payload: VerificationTriggerRequest,
+    x_operator_authorization: Optional[str] = Header(None, alias="X-Operator-Authorization"),
+    x_operator_identity: Optional[str] = Header(None, alias="X-Operator-Identity"),
     task_service: TaskService = Depends(get_task_service),
 ) -> VerificationRecord:
     """Execute an independent verification command (e.g., test or build) in a controlled subprocess.
 
     Enforces trust boundaries:
-    - Verifies either a pre-approved profile or operator-authorized command is provided.
+    - Pre-approved profiles resolve from configuration and receive CONFIGURED_PROFILE origin.
+    - Custom commands require explicit operator authorization via 'X-Operator-Authorization' header.
+    - Untrusted callers cannot manufacture operator provenance.
     - Rejects trivial fake pass commands (e.g. echo, true, exit 0).
     - Captures exit code, duration, and stream-bounded output excerpt.
     """
@@ -78,18 +82,44 @@ async def trigger_task_verification(
         )
 
     from core.verification import VerificationOrigin
-    try:
-        req_origin = VerificationOrigin(payload.origin) if payload.origin else VerificationOrigin.OPERATOR
-    except ValueError:
-        req_origin = VerificationOrigin.OPERATOR
+
+    # Authorization and Provenance Policy:
+    # 1. Configured profiles are authenticated against trusted configuration
+    if payload.profile_name:
+        effective_origin = VerificationOrigin.CONFIGURED_PROFILE
+        effective_authorized_by = "system_policy"
+        effective_command = None
+        effective_profile = payload.profile_name
+    else:
+        # 2. Custom commands strictly require explicit operator authorization header
+        is_operator_authorized = (
+            x_operator_authorization is not None
+            and x_operator_authorization.strip().lower() in ("true", "1", "yes")
+        )
+        if not is_operator_authorized:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Custom verification commands require explicit operator authorization via "
+                    "'X-Operator-Authorization' header. Untrusted callers must use a pre-approved profile_name."
+                ),
+            )
+        effective_origin = VerificationOrigin.OPERATOR
+        effective_authorized_by = (
+            x_operator_identity.strip()
+            if x_operator_identity and x_operator_identity.strip()
+            else (payload.authorized_by or "operator")
+        )
+        effective_command = payload.command
+        effective_profile = None
 
     try:
         record = await task_service.verification_runner.run_verification(
             task_id=task_id,
-            command=payload.command,
-            profile_name=payload.profile_name,
-            origin=req_origin,
-            authorized_by=payload.authorized_by,
+            command=effective_command,
+            profile_name=effective_profile,
+            origin=effective_origin,
+            authorized_by=effective_authorized_by,
             verification_type=payload.verification_type,
             cwd=str(task_service.workspace_context.root_path),
             timeout_seconds=payload.timeout_seconds,

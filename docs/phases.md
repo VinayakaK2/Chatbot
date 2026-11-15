@@ -883,8 +883,8 @@ Make failures understandable, bounded, and recoverable, and ensure completion cl
   - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify` (with profile/provenance support), `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
   - `tools/security.py`: Defense-in-depth secret sanitization covering AWS keys, JWTs, URLs with embedded passwords, private keys, and recursive object scrubbing (`redact_secrets_obj`).
 - **Verification Evidence:**
-  - 40 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
-  - 562/563 backend tests passed (1 skipped live GPU endpoint test) with zero regressions across Phases 0–7.
+  - 43 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+  - 563/564 backend tests passed (1 skipped Windows symlink test in `tests/test_workspace_security.py:122`; `tests/test_smoke_live.py` ignored for offline runs) with zero regressions across Phases 0–7.
   - 59/59 frontend vitest tests passed across 10 test files.
   - Frontend production build (`tsc -b && vite build`) passed cleanly.
 - **Dossier & Documentation:**

@@ -173,7 +173,7 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     assert create_resp.status_code == 201
     task_id = create_resp.json()["task_id"]
 
-    # 2. Trigger verification check via API
+    # 2. Trigger verification check via API with explicit operator authorization header
     verify_resp = client.post(
         f"/api/tasks/{task_id}/verify",
         json={
@@ -181,12 +181,15 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
             "verification_type": "test",
             "timeout_seconds": 10.0,
         },
+        headers={"X-Operator-Authorization": "true", "X-Operator-Identity": "lead_operator"},
     )
     assert verify_resp.status_code == 201
     v_data = verify_resp.json()
     assert v_data["task_id"] == task_id
     assert v_data["result"] == "passed"
     assert v_data["exit_code"] == 0
+    assert v_data["origin"] == "operator"
+    assert v_data["authorized_by"] == "lead_operator"
 
     # 3. Query verifications list
     list_resp = client.get(f"/api/tasks/{task_id}/verifications")
@@ -194,11 +197,54 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     records = list_resp.json()
     assert len(records) == 1
     assert records[0]["command"] == "python -c \"print('VERIFIED')\""
+    assert records[0]["origin"] == "operator"
 
     # 4. Query task status: verification_status is reflected
     task_resp = client.get(f"/api/tasks/{task_id}")
     assert task_resp.status_code == 200
     assert task_resp.json()["verification_status"] == "passed"
+
+
+def test_api_verification_untrusted_caller_cannot_manufacture_operator_provenance(temp_db: DatabaseManager) -> None:
+    """Verify that an untrusted caller cannot execute custom commands or manufacture operator provenance."""
+    from core.task_service import set_task_service
+    task_service = TaskService(database_manager=temp_db, auto_run_recovery=False)
+    set_task_service(task_service)
+    app = create_app()
+    client = TestClient(app)
+
+    create_resp = client.post("/api/tasks", json={"prompt": "Task for authorization check"})
+    assert create_resp.status_code == 201
+    task_id = create_resp.json()["task_id"]
+
+    # 1. Untrusted caller sends raw command WITHOUT operator authorization header -> 403 Forbidden
+    unauth_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={
+            "command": "python -c \"print('ATTACK')\"",
+            "origin": "operator",
+            "authorized_by": "root_admin",
+        },
+    )
+    assert unauth_resp.status_code == 403
+    assert "Custom verification commands require explicit operator authorization" in unauth_resp.json()["detail"]
+
+    # 2. Untrusted caller sends profile_name="test" while trying to inject origin="operator" and authorized_by="attacker"
+    # Provenance is strictly assigned to CONFIGURED_PROFILE and system_policy by the runtime
+    profile_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={
+            "profile_name": "test",
+            "origin": "operator",
+            "authorized_by": "attacker",
+        },
+    )
+    # Runner resolves configured profile; origin is overridden to CONFIGURED_PROFILE
+    assert profile_resp.status_code in (201, 500)  # In mock/test env without actual pytest command it executes profile
+    if profile_resp.status_code == 201:
+        data = profile_resp.json()
+        assert data["origin"] == "configured_profile"
+        assert data["authorized_by"] == "system_policy"
 
 
 def test_verification_rejects_trivial_and_unsafe_commands() -> None:

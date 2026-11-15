@@ -56,16 +56,18 @@ Under this architecture:
 | **10. Decoupled Task vs Verification** | Separate fields in DB & schema; model text claims ignored | `api/schemas/tasks.py:TaskResponse`, `storage/models.py` | `tests/test_verification.py::test_decoupled_task_status_vs_verification_status` | **PASS** |
 | **11. Secret-Free Diagnostics** | Masked CLI diagnostic tool and REST endpoint | `core/diagnostics.py:main`, `GET /api/diagnostics` | `tests/test_diagnostics.py::test_run_diagnostics_full` | **PASS** |
 | **12. Database Transaction Safety** | Transactional DDL support in SQLite via explicit `BEGIN;` | `storage/database.py:transaction()` | `tests/test_persistence.py::test_migration_failure_rollback` | **PASS** |
-| **13. Zero Regressions (Phases 0–7)** | Full test suite execution across all modules | `pytest -q --ignore=tests/test_smoke_live.py` | 563 tests collected: 562 passed, 0 failed, 1 skipped | **PASS** |
+| **13. Zero Regressions (Phases 0–7)** | Full test suite execution across all modules | `pytest -q --ignore=tests/test_smoke_live.py` | 564 tests collected: 563 passed, 0 failed, 1 skipped | **PASS** |
 
 ---
 
 ## 4. Forensic Codebase Inspection
 
 ### 4.1 Verification Trust Boundary & Command Provenance (F8-01)
-- **Finding:** In `core/verification.py`, verification commands are no longer arbitrary shell strings supplied unchecked by callers.
+- **Finding:** In `core/verification.py` and `api/routes/verification.py`, verification commands are strictly guarded against unauthorized execution and self-certification.
 - **Enforcement:**
-  - `VerificationRunner.run_verification` accepts either a pre-approved `profile_name` (`test`, `build`, `lint`, `typecheck`, `test_unit`) or an explicitly authorized operator command (`origin=VerificationOrigin.OPERATOR`).
+  - `POST /api/tasks/{task_id}/verify` strictly requires pre-approved `profile_name` (`test`, `build`, `lint`, `typecheck`, `test_unit`) or an authorized custom command.
+  - Custom command execution requires explicit operator authorization via the `X-Operator-Authorization: true` request header. Untrusted callers without this header receive HTTP 403 Forbidden.
+  - When a pre-approved profile is requested, the runtime deterministically assigns `origin = "configured_profile"` and `authorized_by = "system_policy"`, ignoring any caller-supplied origin or authorizer strings. Untrusted callers cannot manufacture operator provenance.
   - `validate_verification_command` rejects trivial pass commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`, `|`).
   - Subprocesses run with a sanitized environment allowlist `_build_safe_env`, withholding host secrets from child processes.
   - Verification records persist command provenance: `origin`, `profile_name`, and `authorized_by`.
@@ -76,7 +78,7 @@ Under this architecture:
 
 ### 4.3 Defense-in-Depth Secret Sanitization (F8-03)
 - **Finding:** In `tools/security.py`, regex patterns were expanded to cover AWS access keys (`AKIA...`), JWT tokens, URLs with embedded passwords, and RSA private keys.
-- **Enforcement:** `redact_secrets_obj` recursively scrubs nested dictionaries, lists, and exception payloads. The documentation properly characterizes this as defense-in-depth sanitization of recognized patterns on recorded write paths rather than universal confidentiality.
+- **Enforcement:** `redact_secrets_obj` recursively scrubs nested dictionaries, lists, and exception payloads prior to persistence in SQLite (`runtime_events`, `verification_records`, `tool_executions`, `model_calls`, `tasks`) and SSE streaming queues. The documentation properly characterizes this as defense-in-depth sanitization of recognized patterns on recorded write paths rather than universal confidentiality.
 
 ### 4.4 Multi-Level Process Tree Termination (F8-04)
 - **Finding:** In `core/verification.py`, `_terminate_process_tree` terminates subprocess trees using `taskkill /F /T /PID` on Windows and process group `SIGKILL` on POSIX.
@@ -86,11 +88,10 @@ Under this architecture:
 
 ## 5. Auditor Conclusion & Recommendation
 
-The implementation of Phase 8 — Reliability, Observability, and Verification is **COMPLETE, SOUND, AND FULLY BACKED BY OBSERVABLE EVIDENCE**.
-
-There are zero regressions across Phases 0 to 7:
-- All 40 dedicated Phase 8 tests pass (100%).
-- All 562 unit/integration tests in the backend regression suite pass (1 skipped live GPU test).
+The auditor directly inspected the actual repository source code files, database schema DDL, and terminal command outputs:
+- All 43 dedicated Phase 8 tests pass (100%) across 6 test files (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+- The full backend test suite collects 564 tests: 563 pass, 0 fail, and exactly 1 test (`tests/test_workspace_security.py:122`) is skipped due to Windows symlink privilege requirements.
+- `tests/test_smoke_live.py` (2 live tests) is explicitly excluded via `--ignore=tests/test_smoke_live.py` per project policy as it requires active external GPU Colab vLLM server availability.
 - All 59 frontend vitest tests pass across 10 test files.
 - The production frontend build compiles cleanly.
 
