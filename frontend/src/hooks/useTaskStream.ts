@@ -175,6 +175,7 @@ export function useTaskStream(
       setIsExecuting(true)
       isCancelledRef.current = false
       processedEventIds.current.clear()
+      const taskStartTime = Date.now()
 
       try {
         // Step 1: Submit task through backend API contract
@@ -252,10 +253,16 @@ export function useTaskStream(
 
         // Finalize message status once streaming is complete
         if (!isCancelledRef.current) {
+          const clientDurationSec = Math.max(1, Math.round((Date.now() - taskStartTime) / 1000))
+          const resolvedDuration = (typeof taskResponse.duration_seconds === 'number' && taskResponse.duration_seconds > 0)
+            ? taskResponse.duration_seconds
+            : clientDurationSec
+
           onUpdateMessage(assistantMessageId, (msg) => ({
             ...msg,
             status: taskResponse.status === 'executing' ? 'completed' : taskResponse.status,
             content: fullText || msg.content,
+            duration_seconds: msg.duration_seconds ?? resolvedDuration,
           }))
           setIsExecuting(false)
           setActiveTaskId(null)
@@ -263,10 +270,12 @@ export function useTaskStream(
       } catch (err) {
         isStreamingRef.current = false
         const errorMsg = err instanceof Error ? err.message : 'Task execution failed.'
+        const failDurationSec = Math.max(1, Math.round((Date.now() - taskStartTime) / 1000))
         onUpdateMessage(assistantMessageId, (msg) => ({
           ...msg,
           status: 'failed',
           error: errorMsg,
+          duration_seconds: msg.duration_seconds ?? failDurationSec,
         }))
         if (onNotify) {
           onNotify(errorMsg, 'error')
