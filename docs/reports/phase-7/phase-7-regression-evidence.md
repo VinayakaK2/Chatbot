@@ -11,12 +11,12 @@
 
 | Metric | Pre-Phase 7 Baseline (HEAD) | Post-Phase 7 Implementation | Delta | Verdict |
 |:---|:---:|:---:|:---:|:---:|
-| **Backend Tests Collected** | 475 | **513** | **+38** | **PASS** |
-| **Backend Tests Passed** | 474 | **510** | **+36** | **PASS** |
-| **Backend Tests Skipped** | 1 (live mock) | **3** (live mock) | +2 | **PASS** |
+| **Backend Tests Collected** | 475 | **514** | **+39** | **PASS** |
+| **Backend Tests Passed** | 474 | **513** | **+39** | **PASS** |
+| **Backend Tests Skipped** | 1 (live mock) | **1** (live mock) | 0 | **PASS** |
 | **Backend Tests Failed** | 0 | **0** | 0 | **PASS** |
 | **Frontend Test Files** | 10 | **10** | 0 | **PASS** |
-| **Frontend Tests Passed** | 52 | **52** | 0 | **PASS** |
+| **Frontend Tests Passed** | 52 | **55** | +3 | **PASS** |
 | **Frontend Tests Failed** | 0 | **0** | 0 | **PASS** |
 | **Frontend Build (`tsc -b && vite build`)** | Passed | **Passed (0 errors)** | — | **PASS** |
 
@@ -53,20 +53,21 @@ tests/test_secret_scrubbing_across_all_tables PASSED                            
 ```
 **Output:**
 ```
-tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [  8%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 16%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 25%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 33%]
-tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 41%]
-tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 50%]
-tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 58%]
-tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 66%]
-tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [ 75%]
-tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle PASSED [ 83%]
-tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification PASSED [ 91%]
-tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart PASSED [100%]
+tests/test_session_recovery.py::test_recovery_clean_startup_no_interrupted_tasks PASSED [  7%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume PASSED [ 15%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume PASSED [ 23%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay PASSED [ 30%]
+tests/test_session_recovery.py::test_recovery_interrupted_executing_task_shell_command_needs_review PASSED [ 38%]
+tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart PASSED [ 46%]
+tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart PASSED [ 53%]
+tests/test_session_recovery.py::test_recovery_terminal_tasks_immutable_across_recovery PASSED [ 61%]
+tests/test_session_recovery.py::test_recovery_batch_interrupted_mixed_tasks PASSED [ 69%]
+tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle PASSED [ 76%]
+tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification PASSED [ 84%]
+tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart PASSED [ 92%]
+tests/test_session_recovery.py::test_recovery_continuation_task_concurrent_race_prevention PASSED [100%]
 
-============================= 12 passed in 0.89s ==============================
+============================= 13 passed in 0.89s ==============================
 ```
 
 ### 2.3 Sessions REST API Integration Suite (`tests/test_api_sessions.py`)
@@ -93,7 +94,7 @@ tests/test_api_sessions.py::TestSessionEndpoints::test_task_submission_attaches_
 .venv\Scripts\python -m pytest
 ```
 **Summary:**
-- **510 passed, 3 skipped, 1 warning in 26.56s**
+- **513 passed, 1 skipped, 1 warning in 33.02s**
 - **0 errors, 0 failures**
 
 ---

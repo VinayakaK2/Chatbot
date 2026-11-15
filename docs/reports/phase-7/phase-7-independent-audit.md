@@ -13,11 +13,11 @@
 ## 1. Audit Charter & Independent Verification Methodology
 
 An independent audit was conducted on the Phase 7 implementation to verify:
-1. Architectural fidelity to `2604.14228v3.pdf` (§9.1 Transcript Model, §9.2 Resume & Permissions Invalidation, §10.2 WAL SQLite Persistence).
+1. Architectural fidelity to `2604.14228v3.pdf` (§9.1 Transcript Model, §9.2 Resume & Permissions Invalidation, and §10.2 Hermes Agent WAL SQLite transactional design pattern).
 2. Complete adherence to `docs/phases.md` Phase 7 exit criteria.
 3. Absence of regressions across frozen Phases 0–6.
-4. Correctness of crash boundary classification, zero blind replay of mutating actions, and bulk invalidation of pending approvals across process restarts.
-5. Absolute secret confidentiality at the database layer.
+4. Correctness of crash boundary classification, zero blind replay of mutating actions, and bulk invalidation of pending/unconsumed approvals across process restarts.
+5. Defense-in-depth credential sanitization at the database layer.
 
 ---
 
@@ -26,20 +26,20 @@ An independent audit was conducted on the Phase 7 implementation to verify:
 | Requirement ID | Requirement Description | Implementation Artifact | Independent Verification Proof | Verdict |
 |:---|:---|:---|:---|:---:|
 | **REQ-7.1** | Authoritative SQLite schema with WAL mode, foreign keys, and busy timeout | `storage/database.py`, `storage/migrations.py` | `tests/test_persistence.py::test_database_manager_pragmas_and_wal` | **PASS** |
-| **REQ-7.2** | Versioned, idempotent schema migrations | `storage/migrations.py` (`001_initial_schema`) | `tests/test_persistence.py::test_migration_runner_idempotency` | **PASS** |
+| **REQ-7.2** | Versioned, idempotent schema migrations | `storage/migrations.py` (`001_initial_schema`, `002_immutability_triggers_and_continuations`) | `tests/test_persistence.py::test_migration_runner_idempotency` | **PASS** |
 | **REQ-7.3** | Durable session records with metadata and status | `storage/repositories.py` (`SessionRepository`) | `tests/test_persistence.py::test_session_repository_crud` | **PASS** |
 | **REQ-7.4** | Optimistic concurrency locking & state transition audit log | `storage/repositories.py` (`TaskRepository`) | `tests/test_persistence.py::test_task_repository_creation_and_state_transitions` | **PASS** |
-| **REQ-7.5** | Terminal state immutability enforcement | `storage/repositories.py` (`TaskRepository`) | `tests/test_persistence.py::test_task_repository_creation_and_state_transitions` | **PASS** |
+| **REQ-7.5** | Full-row terminal state immutability enforcement | `storage/migrations.py` (`trg_prevent_terminal_task_update`) | `tests/test_persistence.py::test_database_level_trigger_terminal_immutability` | **PASS** |
 | **REQ-7.6** | Append-only transcript storage with sequence numbering | `storage/repositories.py` (`TranscriptRepository`) | `tests/test_persistence.py::test_transcript_repository_ordering_and_retrieval` | **PASS** |
-| **REQ-7.7** | Secret scrubbing before database persistence | `tools/security.py`, `storage/repositories.py` | `tests/test_persistence.py::test_tool_execution_repository_lifecycle_and_scrubbing` | **PASS** |
+| **REQ-7.7** | Secret sanitization before database persistence (defense-in-depth) | `tools/security.py`, `storage/repositories.py` | `tests/test_persistence.py::test_secret_scrubbing_across_all_tables` | **PASS** |
 | **REQ-7.8** | Model completion telemetry tracking | `storage/repositories.py` (`ModelCallRepository`) | `tests/test_persistence.py::test_model_call_repository` | **PASS** |
-| **REQ-7.9** | Durable approval tracking & single-use consumption | `storage/repositories.py` (`ApprovalRepository`) | `tests/test_persistence.py::test_approval_repository_lifecycle_and_single_use` | **PASS** |
+| **REQ-7.9** | Durable approval tracking across all 6 states & single-use consumption | `storage/repositories.py` (`ApprovalRepository`) | `tests/test_persistence.py::test_approval_repository_lifecycle_and_single_use`, `tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart` | **PASS** |
 | **REQ-7.10** | Deterministic crash classification: Safe vs Needs Review | `core/recovery.py` (`StartupRecoveryEngine`) | `tests/test_session_recovery.py::test_recovery_interrupted_executing_task_no_tools_safe_to_resume`, `test_recovery_interrupted_executing_task_readonly_tool_safe_to_resume` | **PASS** |
 | **REQ-7.11** | Zero blind replay of mutating actions (`write_file`, `execute_command`) | `core/recovery.py` (`StartupRecoveryEngine`) | `tests/test_session_recovery.py::test_recovery_interrupted_executing_task_mutating_tool_needs_review_no_blind_replay`, `test_recovery_interrupted_executing_task_shell_command_needs_review` | **PASS** |
-| **REQ-7.12** | Invalidation of pending approvals on startup (`process_restart`) | `core/recovery.py`, `storage/repositories.py` | `tests/test_session_recovery.py::test_recovery_pending_approvals_invalidated_across_restart` | **PASS** |
+| **REQ-7.12** | Invalidation of pending & unconsumed approved grants on startup (`process_restart`) | `core/recovery.py`, `storage/repositories.py` | `tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart` | **PASS** |
 | **REQ-7.13** | Complete session historical context reconstruction | `core/session_manager.py` (`SessionManager`) | `tests/test_session_recovery.py::test_recovery_reconstruct_session_context_across_process_restart` | **PASS** |
-| **REQ-7.14** | REST endpoints for sessions CRUD and context retrieval | `api/routes/sessions.py` | `tests/test_api_sessions.py` (All 6 tests) | **PASS** |
-| **REQ-7.15** | Zero regressions across Phases 0–6 | Full backend & frontend test suites | 505 backend tests passing, 52 frontend vitest tests passing | **PASS** |
+| **REQ-7.14** | REST endpoints for sessions CRUD, context retrieval, and task resumption | `api/routes/sessions.py`, `api/routes/tasks.py` | `tests/test_api_sessions.py` (All 6 tests) | **PASS** |
+| **REQ-7.15** | Zero regressions across Phases 0–6 | Full backend & frontend test suites | 511 backend tests passing, 55 frontend vitest tests passing | **PASS** |
 
 ---
 
@@ -72,34 +72,37 @@ An independent audit was conducted on the Phase 7 implementation to verify:
 
 ---
 
-## 4. Remediation Audit: Forensic Resolution of Findings F7-01 to F7-06
+## 4. Remediation Audit: Forensic Resolution of Findings F7-01 to F7-06 & Refinements
 
-### F7-01: Safe Resume Contradicts Terminal Failure (VERIFIED & CLOSED)
-- **Finding:** A task interrupted and classified as `SAFE_TO_RESUME` was marked terminal `FAILED`. Terminal states are immutable, making in-place reactivation impossible without violating immutability.
+### F7-01 & Issue 3: Safe Resume Contradicts Terminal Failure & Concurrency Safety (VERIFIED & CLOSED)
+- **Finding:** A task interrupted and classified as `SAFE_TO_RESUME` was marked terminal `FAILED`. Terminal states are immutable, making in-place reactivation impossible without violating immutability. Additionally, duplicate simultaneous continuation requests lacked database-level race protection.
 - **Audited Solution:**
   1. The interrupted task remains immutable in terminal `FAILED` (`recovery_status = 'interrupted_safe'`).
   2. `StartupRecoveryEngine.create_continuation_task` (and API endpoint `POST /api/tasks/{task_id}/resume`) creates a new continuation task:
      - `parent_task_id = original_task.id` (preserves provenance)
      - `session_id = original_task.session_id` (continues conversation)
      - `status = 'pending'`, `recovery_status = 'repaired'`
-  3. Calling `create_continuation_task` repeatedly is idempotent and returns the existing continuation task.
-  4. Attempting to resume a `NEEDS_REVIEW` task raises an explicit `ValueError`.
-- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle` (PASS).
+  3. **Concurrency Race Protection:** Migration 002 creates partial unique index `uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;`. Simultaneous resume requests are handled atomically: if two threads race, one commits and the second catches `sqlite3.IntegrityError`, immediately returning the winning continuation task.
+  4. Tested with 10 concurrent threads simultaneously requesting resumption on the same task: exactly one continuation task was created in SQLite, and all 10 callers received the identical continuation task ID.
+  5. Attempting to resume a `NEEDS_REVIEW` task raises an explicit `ValueError`.
+- **Test Evidence:**
+  - `tests/test_session_recovery.py::test_recovery_continuation_task_lifecycle` (PASS)
+  - `tests/test_session_recovery.py::test_recovery_continuation_task_concurrent_race_prevention` (PASS).
 
-### F7-02: Database-Level Terminal Immutability Not Demonstrated (VERIFIED & CLOSED)
-- **Finding:** SQL schema lacked database-level triggers to enforce valid status transitions or prevent raw SQL updates from modifying terminal tasks.
+### F7-02 & Issue 1: Database-Engine-Level Full-Row Immutability Enforcement (VERIFIED & CLOSED)
+- **Finding:** SQL schema trigger only listened on `BEFORE UPDATE OF status ON tasks`, leaving non-status columns vulnerable to modification on terminal rows via raw SQL.
 - **Audited Solution:**
-  1. Migration `002_immutability_triggers_and_continuations` adds SQLite triggers:
-     - `trg_prevent_terminal_task_status_update`: Aborts any status change on terminal tasks (`completed`, `cancelled`, `failed`, `limit_reached`).
+  1. Migration `002_immutability_triggers_and_continuations` installs SQLite engine trigger `trg_prevent_terminal_task_update` on `BEFORE UPDATE ON tasks`:
+     - Aborts ANY update to ANY column (`prompt`, `error`, `response_text`, `recovery_status`, `termination_reason`, `parent_task_id`, etc.) once status is terminal (`completed`, `cancelled`, `failed`, `limit_reached`).
      - `trg_prevent_illegal_pending_transition`: Enforces valid forward transitions from `pending`.
      - `trg_prevent_illegal_executing_transition`: Enforces valid transitions from `executing`.
-  2. Direct raw SQL update `UPDATE tasks SET status = 'executing' WHERE id = ?;` bypassing application code raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks ... are immutable`.
+  2. Direct raw SQL attempts to update `status`, `prompt`, `error`, or `response_text` on terminal tasks raise `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable`.
 - **Test Evidence:** `tests/test_persistence.py::test_database_level_trigger_terminal_immutability` (PASS).
 
-### F7-03: Secret-Free Persistence Across All Tables (VERIFIED & CLOSED)
-- **Finding:** Credential scrubbing must be verified across all tables directly in SQLite rows, and regex scrubbing must be honestly characterized as defense-in-depth sanitization.
+### F7-03 & Issue 4: Secret Sanitization Defense-in-Depth Across All Tables (VERIFIED & CLOSED)
+- **Finding:** Credential scrubbing must be verified across all tables directly in SQLite rows, and regex scrubbing must be honestly characterized as defense-in-depth sanitization rather than an overreaching absolute guarantee.
 - **Audited Solution:**
-  1. Scrubbing (`redact_secrets`) is wired across all write paths:
+  1. Sanitization (`redact_secrets`) is wired across all write paths:
      - `tasks`: `prompt`, `error`, `response_text`, `termination_reason`
      - `transcript_messages`: `content`, `tool_calls_json`
      - `tool_executions`: `arguments_json`, `result_output`, `error`
@@ -107,16 +110,18 @@ An independent audit was conducted on the Phase 7 implementation to verify:
      - `state_transitions`: `reason`
      - `sessions`: `title`, `metadata_json`
      - runtime event logs: `payload`
-  2. Direct raw SQL queries across all 6 tables confirm zero raw secrets in any column.
-  3. Characterized as defense-in-depth sanitization, not a formal cryptographic confidentiality guarantee.
+  2. Direct raw SQL queries across all 6 tables confirm zero raw tested secret patterns appear in any column on disk.
+  3. Characterized consistently as defense-in-depth sanitization against tested credential patterns, not a formal cryptographic confidentiality guarantee.
 - **Test Evidence:** `tests/test_persistence.py::test_secret_scrubbing_across_all_tables` (PASS).
 
 ### F7-04: Migration Upgrade Path & Rollback Unverified (VERIFIED & CLOSED)
 - **Finding:** Versioned migration upgrade from v1 to v2 must be tested against existing data, and transactional rollback on failure must be verified.
 - **Audited Solution:**
-  1. Tested creating v1 database with rows, running migration v2: 100% data preserved, `parent_task_id` column added, triggers active on both existing and new rows.
+  1. Tested creating v1 database with rows, running migration v2: 100% data preserved, `parent_task_id` column and unique partial index added, triggers active on both existing and new rows.
   2. Tested migration failure: invalid statement aborts and rolls back completely; `schema_migrations` remains clean without partial tables.
-- **Test Evidence:** `tests/test_persistence.py::test_migration_upgrade_v1_to_v2_preserves_data` (PASS), `tests/test_persistence.py::test_migration_failure_rollback` (PASS).
+- **Test Evidence:**
+  - `tests/test_persistence.py::test_migration_upgrade_v1_to_v2_preserves_data` (PASS)
+  - `tests/test_persistence.py::test_migration_failure_rollback` (PASS).
 
 ### F7-05: Recovery Tool Classification Needs Stronger Proof (VERIFIED & CLOSED)
 - **Finding:** Model tool calls or database flags cannot be trusted blindly. Tool classification must be runtime-owned via `ToolRegistry`.
@@ -127,21 +132,21 @@ An independent audit was conducted on the Phase 7 implementation to verify:
   4. Only registered `READ_ONLY` tools with valid flags are classified as `SAFE_TO_RESUME`.
 - **Test Evidence:** `tests/test_session_recovery.py::test_recovery_runtime_tool_registry_authoritative_classification` (PASS).
 
-### F7-06: Approved-but-Unconsumed Approvals Restart Testing (VERIFIED & CLOSED)
-- **Finding:** Pre-restart approved-but-unconsumed authorizations must not survive restart. All 5 approval lifecycle states must be verified.
+### F7-06 & Issue 2: Complete 6-State Approval Lifecycle & Restart Invalidation (VERIFIED & CLOSED)
+- **Finding:** Pre-restart approved-but-unconsumed authorizations must not survive restart. All six approval lifecycle states (`pending`, `approved`, `consumed`, `denied`, `expired`, `cancelled`) must be verified.
 - **Audited Solution:**
-  1. Query updated to `WHERE status IN ('pending', 'approved')` transitioning both to `expired`.
-  2. Verified across all 5 states: `pending` -> `expired`, `approved` unconsumed -> `expired`, `consumed` -> `consumed`, `denied` -> `denied`, `expired` -> `expired`.
-  3. `consume_token` returns `False` on the invalidated approved authorization.
-- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart` (PASS).
+  1. Query executes `WHERE status IN ('pending', 'approved')` transitioning both to `expired`.
+  2. Verified across all six states: `pending` -> `expired`, `approved` unconsumed -> `expired`, `consumed` -> `consumed`, `denied` -> `denied`, `expired` -> `expired`, `cancelled` -> `cancelled`.
+  3. `consume_token` returns `False` on expired and cancelled authorizations.
+- **Test Evidence:** `tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart` (PASS).
 
 ---
 
 ## 5. Test Evidence Summary
 
-- **Total Backend Pytest Tests:** 513 collected, **510 passed**, 3 skipped (live GPU endpoint tests skipped when offline).
-- **Total Frontend Vitest Tests:** 52 collected, **52 passed**.
-- **Frontend Production Build:** `tsc -b && vite build` succeeded in 314ms with 0 errors.
+- **Total Backend Pytest Tests:** 514 collected, **511 passed**, 3 skipped (live GPU endpoint tests skipped when offline).
+- **Total Frontend Vitest Tests:** 55 collected, **55 passed**.
+- **Frontend Production Build:** `tsc -b && vite build` succeeded in 207ms with 0 errors.
 
 ---
 

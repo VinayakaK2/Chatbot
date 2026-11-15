@@ -90,14 +90,15 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 
 ---
 
-### ADV-07: Direct SQL Mutation Bypass of Terminal Immutability Blocked by Database Engine Triggers
-- **Scenario:** An attacker, flawed migration, or rogue script executes a raw SQL `UPDATE` statement directly against the SQLite database connection, attempting to reactivate a `completed` or `failed` task to `executing` without going through Python application repositories.
-- **Threat:** Bypassing Python-level `InvalidStateTransitionError` checks by issuing raw SQL queries.
-- **Defense Implementation:** Migration `002_immutability_triggers_and_continuations` installs SQLite engine trigger `trg_prevent_terminal_task_status_update`.
+### ADV-07: Direct SQL Mutation Bypass of Full-Row Terminal Immutability Blocked by Database Engine Triggers
+- **Scenario:** An attacker, flawed migration, or rogue script executes a raw SQL `UPDATE` statement directly against the SQLite database connection, attempting to modify `status`, `prompt`, `error`, `response_text`, `recovery_status`, or other columns of a `completed` or `failed` task without going through Python application repositories.
+- **Threat:** Bypassing application-level immutability checks by updating non-status columns via raw SQL.
+- **Defense Implementation:** Migration `002_immutability_triggers_and_continuations` installs SQLite engine trigger `trg_prevent_terminal_task_update` on `BEFORE UPDATE ON tasks`.
 - **Observed Evidence:**
-  - Raw SQL `UPDATE tasks SET status = 'executing' WHERE id = ?;` immediately raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable`.
+  - Raw SQL `UPDATE tasks SET status = 'executing' WHERE id = ?;` immediately raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable`.
+  - Raw SQL `UPDATE tasks SET prompt = '...'` or `SET error = '...'` or `SET response_text = '...'` on a terminal task immediately raises the same `sqlite3.IntegrityError`.
   - Raw SQL jump from `pending` directly to `completed` raises `sqlite3.IntegrityError: Illegal database state transition: pending tasks may only transition to executing, cancelled, or failed`.
-  - The task status remains unmodified in SQLite.
+  - The entire terminal task row remains unmodified in SQLite.
 - **Test Proof:** `tests/test_persistence.py::test_database_level_trigger_terminal_immutability` (PASS).
 
 ---
@@ -114,25 +115,26 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 
 ---
 
-### ADV-09: Approved-but-Unconsumed Grants Expired Across Restart Boundary
-- **Scenario:** An operator approves a sensitive command (`execute_command`). The approval status is `approved`, but the application crashes or restarts before the command token is consumed by the runner.
-- **Threat:** Weaponizing stale pre-restart authorizations in a newly booted environment (`2604.14228v3.pdf` §5, §9.2).
-- **Defense Implementation:** `StartupRecoveryEngine` invalidates all authorizations `WHERE status IN ('pending', 'approved')` to `status = 'expired'`.
+### ADV-09: Complete 6-State Approval Lifecycle & Restart Invalidation
+- **Scenario:** An operator approves a sensitive command (`execute_command`). The approval status is `approved`, but the application crashes or restarts before the command token is consumed by the runner. Other approvals exist in `pending`, `consumed`, `denied`, `expired`, and `cancelled` states.
+- **Threat:** Weaponizing stale pre-restart authorizations in a newly booted environment (`2604.14228v3.pdf` §5, §9.2), or mutating terminal approval states.
+- **Defense Implementation:** `StartupRecoveryEngine` invalidates all authorizations `WHERE status IN ('pending', 'approved')` to `status = 'expired'`. Terminal states (`consumed`, `denied`, `expired`, `cancelled`) are preserved.
 - **Observed Evidence:**
-  - After restart, the unconsumed approved record is in `status == 'expired'`.
-  - Calling `consume_token()` returns `False` immediately.
-  - Pre-restart approval tokens cannot be used to execute commands.
-- **Test Proof:** `tests/test_session_recovery.py::test_recovery_all_five_approval_states_on_restart` (PASS).
+  - After restart, both `pending` and unconsumed `approved` records transition to `status == 'expired'`.
+  - Terminal resolution records remain unchanged: `consumed` -> `consumed`, `denied` -> `denied`, `expired` -> `expired`, `cancelled` -> `cancelled`.
+  - Calling `consume_token()` on expired or cancelled records returns `False` immediately.
+- **Test Proof:** `tests/test_session_recovery.py::test_recovery_all_six_approval_states_on_restart` (PASS).
 
 ---
 
-### ADV-10: Secret Scrubbing Audited Across Every SQLite Table
+### ADV-10: Secret Sanitization Defense-in-Depth Across Every SQLite Table
 - **Scenario:** Raw secrets (Anthropic keys, GitHub PATs, Bearer tokens, passwords) are passed into task prompts, error logs, response text, transcript turns, tool arguments, approval requests, and session metadata.
 - **Threat:** Plain-text credential persistence in SQLite database files.
 - **Defense Implementation:** `redact_secrets` is wired into every repository write path: `tasks`, `transcript_messages`, `tool_executions`, `approvals`, `state_transitions`, `sessions`, and event logs.
 - **Observed Evidence:**
-  - Raw SQL inspection of all SQLite table rows confirms that plain-text secret strings (`sk-ant-api03-...`, `ghp_...`, Bearer payloads) are 100% absent across every column and table.
+  - Raw SQL inspection of all SQLite table rows confirms that tested plain-text secret strings (`sk-ant-api03-...`, `ghp_...`, Bearer payloads) are 100% absent across every column and table.
   - Defense-in-depth sanitization replaces credentials with `[REDACTED]`, `[REDACTED_TOKEN]`, or `***`.
+  - Qualified as defense-in-depth sanitization: verifies that tested token patterns are detected and scrubbed, without claiming mathematical impossibility of leaking unmodeled secret formats.
 - **Test Proof:** `tests/test_persistence.py::test_secret_scrubbing_across_all_tables` (PASS).
 
 ---
@@ -162,12 +164,24 @@ Every test was executed against real temporary on-disk SQLite databases on Windo
 
 ---
 
+### ADV-13: Concurrent Simultaneous Resume Race Condition Prevention
+- **Scenario:** Two or more simultaneous API requests arrive concurrently attempting to resume the exact same interrupted task before either transaction commits.
+- **Threat:** Duplicate continuation tasks created for the same parent task, violating task lineage integrity.
+- **Defense Implementation:**
+  - Migration 002 creates partial unique index `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;`.
+  - `create_continuation_task` handles concurrent `sqlite3.IntegrityError` by atomically catching the collision and returning the winning continuation task.
+- **Observed Evidence:**
+  - Tested with 10 concurrent threads simultaneously requesting continuation: zero unhandled exceptions, exactly ONE task persisted in SQLite with `parent_task_id = original_task.id`, and all 10 callers receive the identical continuation task record.
+- **Test Proof:** `tests/test_session_recovery.py::test_recovery_continuation_task_concurrent_race_prevention` (PASS).
+
+---
+
 ## 3. Summary Verdict
 
 All adversarial, edge-case, and crash-boundary scenarios pass with 100% compliance. The persistence and recovery subsystems guarantee:
 1. Complete determinism under crash boundaries.
 2. Zero blind replay of mutating actions.
-3. Fail-closed security for human approvals.
-4. Defense-in-depth sanitization of secrets on disk across all tables.
-5. Linearizable optimistic concurrency control.
-6. Database-engine-level enforcement of terminal immutability via SQLite triggers.
+3. Fail-closed security for human approvals across all six lifecycle states.
+4. Defense-in-depth sanitization of tested credentials on disk across all tables.
+5. Linearizable optimistic concurrency control and unique-index-enforced continuation concurrency safety.
+6. Database-engine-level enforcement of full-row terminal immutability via SQLite triggers.

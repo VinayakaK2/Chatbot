@@ -28,8 +28,8 @@ Phase 7 of the Chatbot Agent Runtime project has been fully implemented, rigorou
 ║     • Ephemeral authorization boundary: Stale grants expired on restart  ║
 ║     • Secret scrubbing defense-in-depth: Audited across all tables       ║
 ║     • Session context reconstruction: Complete & ordered                 ║
-║     • Backend test suite: 510 passed, 3 skipped, 0 failed               ║
-║     • Frontend test suite: 52 passed, 0 failed                           ║
+║     • Backend test suite: 513 passed, 1 skipped, 0 failed               ║
+║     • Frontend test suite: 55 passed, 0 failed                           ║
 ║     • Frontend build: 0 TypeScript / bundling errors                     ║
 ║     • Frozen Phase 0–6 regression status: 0 regressions                  ║
 ║                                                                          ║

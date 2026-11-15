@@ -13,20 +13,20 @@ Phase 7 introduces durable, authoritative persistence and safe session recovery 
 As established in `2604.14228v3.pdf`:
 - §9.1 (*Transcript Model*): Live context in working memory cannot outlive process execution or unbounded context growth. Durable state records the history of actions, decisions, and outcomes.
 - §9.2 (*Resume, Fork, and Not Restoring Permissions*): Session resumption must never restore stale security grants into a changed context. Any interrupted or restarted execution must enforce deny-first authorization.
-- §10.2 (*Hermes Comparison*): A WAL-mode SQLite database provides transactional ACID guarantees, relational indexing, cross-session search, and concurrent-reader support without external service dependencies.
+- §10.2 (*Hermes Comparison*): Observes Hermes Agent's choice of WAL-mode SQLite for transactional local state. While §10.2 documents this as one specific system's architectural pattern rather than a universal mandate for all agent runtimes, this project deliberately adopts WAL-mode SQLite based on our local runtime requirements (zero external service dependencies, ACID transactions, non-blocking concurrent readers, single-file deployment, and local developer ergonomics).
 - §12.3 (*Architectural Trade-offs*): Safety must take precedence over convenience. Non-idempotent operations whose outcome is unknown across a crash boundary must never be blindly replayed.
 
 ### Core Invariants
 
 1. **SQLite as Single Authoritative Truth:** In-memory objects (`_tasks`, `ContextManager`) are volatile working projections. Durable state resides in SQLite with `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, `PRAGMA foreign_keys = ON`, and `PRAGMA busy_timeout = 5000`.
-2. **Terminal State Immutability:** Once a task reaches a terminal state (`completed`, `cancelled`, `failed`, `limit_reached`), it cannot be transitioned to any other state. Attempted mutations are rejected at both database constraint and application service layers.
+2. **Terminal State & Full-Row Immutability:** Once a task reaches a terminal state (`completed`, `cancelled`, `failed`, `limit_reached`), the entire row is completely immutable. Attempted updates to ANY column (`status`, `prompt`, `error`, `response_text`, `recovery_status`, `termination_reason`, `parent_task_id`, etc.) are aborted by SQLite engine trigger `trg_prevent_terminal_task_update`.
 3. **Crash Boundary Classification:** Interrupted tasks (`executing` at server startup) are deterministically classified:
    - `SAFE_TO_RESUME`: No in-flight mutating tool executions; prior context is intact.
-   - `NEEDS_REVIEW`: A non-idempotent tool execution (e.g., `write_file`, `execute_command`) was in-flight (`started`) when the crash occurred; the state of external systems is indeterminate, so automatic replay is strictly prohibited.
+   - `NEEDS_REVIEW`: A non-idempotent tool execution (e.g., `write_file`, `execute_command`) or an unverified tool was in-flight (`started`) when the crash occurred; the state of external systems is indeterminate, so automatic replay is strictly prohibited.
    - `FAILED`: Unrecoverable errors or explicit failure boundaries.
    - `TERMINAL`: Tasks that already committed a terminal transition before interruption.
-4. **Zero Stale Approvals:** All approvals left `pending` across process restarts are immediately marked `expired`. No authorization token survives process termination.
-5. **Secret-Free Persistence Boundary:** All credentials, API keys, and sensitive tokens are scrubbed and redacted prior to writing records to disk.
+4. **Zero Stale Approvals Across Process Restart:** All authorizations in `status IN ('pending', 'approved')` are marked `expired` across process restarts. Stale authorization tokens cannot be consumed. All six lifecycle states are preserved or transitioned deterministically.
+5. **Defense-in-Depth Secret Sanitization:** Tested credential patterns (API keys, GitHub PATs, Bearer tokens, passwords) are scrubbed and redacted prior to writing records to disk across all tables as a defense-in-depth sanitization measure.
 
 ---
 
@@ -373,15 +373,17 @@ CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 -- Add parent_task_id column to tasks table for lineage tracking and safe resumption
 ALTER TABLE tasks ADD COLUMN parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS idx_tasks_parent_task ON tasks(parent_task_id);
+-- Unique partial index enforcing AT MOST ONE continuation task per parent task at the database engine level
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;
 
--- Trigger 1: Engine-level enforcement of terminal task immutability
-CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_status_update
-BEFORE UPDATE OF status ON tasks
+-- Trigger 1: Engine-level enforcement of FULL-ROW terminal task immutability
+DROP TRIGGER IF EXISTS trg_prevent_terminal_task_status_update;
+CREATE TRIGGER IF NOT EXISTS trg_prevent_terminal_task_update
+BEFORE UPDATE ON tasks
 FOR EACH ROW
 WHEN OLD.status IN ('completed', 'cancelled', 'failed', 'limit_reached')
 BEGIN
-    SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are immutable');
+    SELECT RAISE(ABORT, 'Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable');
 END;
 
 -- Trigger 2: Engine-level enforcement of valid transitions from PENDING
@@ -399,15 +401,15 @@ BEFORE UPDATE OF status ON tasks
 FOR EACH ROW
 WHEN OLD.status = 'executing' AND NEW.status NOT IN ('completed', 'failed', 'cancelled', 'limit_reached')
 BEGIN
-    SELECT RAISE(ABORT, 'Illegal database state transition: executing tasks may only transition to completed, failed, cancelled, or limit_reached');
+    SELECT RAISE(ABORT, 'Illegal database state transition: executing tasks may only transition to terminal states');
 END;
 ```
 
 ---
 
-## 4. Remediation & Operational Invariants (Findings F7-01 to F7-06)
+## 4. Remediation & Operational Invariants (Findings F7-01 to F7-06 & Refinements)
 
-### 4.1 F7-01: Continuation Task Pattern for Safe Resumption
+### 4.1 F7-01 & Issue 3: Continuation Task Pattern & Concurrency Protection
 A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is strictly immutable. To resume execution without violating terminal immutability:
 1. The interrupted task remains in `FAILED` status indefinitely, serving as an immutable historical record.
 2. The operator or runtime invokes `create_continuation_task(original_task_id)` / `POST /api/tasks/{task_id}/resume`.
@@ -417,15 +419,18 @@ A task in terminal `FAILED` status (`recovery_status = 'interrupted_safe'`) is s
    - `status = 'pending'`
    - `recovery_status = 'repaired'`
    - `prompt = original_task.prompt`
-4. Idempotency is enforced: re-calling `create_continuation_task` on an already-continued task returns the existing continuation task without duplicate creation.
+4. **Concurrency Race Protection:**
+   - The database enforces a partial unique index: `uq_tasks_parent_task ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL;`.
+   - If two or more simultaneous resume requests race to execute, one commits and any concurrent racer encounters a unique constraint integrity error. `StartupRecoveryEngine.create_continuation_task` catches `sqlite3.IntegrityError` and returns the winning continuation task.
+   - Tested and proven with 10 concurrent threads simultaneously issuing resume requests: exactly ONE continuation is persisted, and all callers receive the identical task ID.
 5. Attempting to resume a `NEEDS_REVIEW` task raises `ValueError`.
 
-### 4.2 F7-02: Database-Engine-Level Immutability Enforcement
-Terminal state immutability and linear status transitions are enforced directly by SQLite engine triggers:
-- `trg_prevent_terminal_task_status_update` aborts any SQL `UPDATE` trying to modify status once terminal (`completed`, `cancelled`, `failed`, `limit_reached`).
-- Direct SQL updates bypassing Python application code raise `sqlite3.IntegrityError: Illegal database state transition: terminal tasks ... are immutable`.
+### 4.2 F7-02 & Issue 1: Database-Engine-Level Full-Row Immutability Enforcement
+Terminal state immutability is enforced at the SQLite engine level for the entire row:
+- `trg_prevent_terminal_task_update` runs `BEFORE UPDATE ON tasks` (not merely on `status`).
+- Any raw SQL attempting to modify ANY column (`prompt`, `error`, `response_text`, `recovery_status`, `termination_reason`, `parent_task_id`, etc.) of a terminal task raises `sqlite3.IntegrityError: Illegal database state transition: terminal tasks (completed, cancelled, failed, limit_reached) are completely immutable`.
 
-### 4.3 F7-03: Secret-Free Persistence Defense-in-Depth
+### 4.3 F7-03 & Issue 4: Secret Sanitization Defense-in-Depth
 Credential sanitization (`redact_secrets`) is applied on all database write paths:
 - `tasks`: `prompt`, `error`, `response_text`, `termination_reason`
 - `transcript_messages`: `content`, `tool_calls_json`
@@ -434,7 +439,7 @@ Credential sanitization (`redact_secrets`) is applied on all database write path
 - `state_transitions`: `reason`
 - `sessions`: `title`, `metadata_json`
 - runtime event logs: `payload`
-*Defense-in-depth notice:* Regex scrubbing provides active sanitization against accidental leakage of well-known secret patterns (API keys, tokens, Bearer headers, passwords). It is documented as defense-in-depth sanitization, not a formal cryptographic confidentiality guarantee.
+*Defense-in-depth qualification:* Regex scrubbing provides active sanitization against tested credential patterns (Anthropic API keys, GitHub PATs, Bearer tokens, passwords). Testing verifies that known token patterns are detected and redacted on all recorded write paths; it is documented as defense-in-depth sanitization rather than an absolute guarantee against every conceivable secret format.
 
 ### 4.4 F7-04: Versioned Migration Upgrade and Rollback
 - MigrationRunner tracks migrations sequentially in `schema_migrations`.
@@ -447,13 +452,17 @@ Tool safety classification during startup recovery is governed by the active run
 - Even if a database record has `is_mutation=0` or `idempotent=1`, the tool is classified as `SAFE_TO_RESUME` only if `ToolRegistry.get(tool_name).risk_category == ToolRiskCategory.READ_ONLY`.
 - Mutating tools (`workspace_write`, `command_execution`, `destructive`) with forged or corrupted DB flags are overridden to `NEEDS_REVIEW`.
 
-### 4.6 F7-06: Authorization Invalidation Across Restart
-Per `2604.14228v3.pdf` §5 and §9.2, security grants and authorizations never survive process termination:
+### 4.6 F7-06 & Issue 2: Complete 6-State Approval Lifecycle Across Restart
+The schema permits six approval states: `pending`, `approved`, `denied`, `expired`, `cancelled`, `consumed`.
+Per `2604.14228v3.pdf` §5 and §9.2:
 - On startup, `StartupRecoveryEngine` executes:
   `UPDATE approvals SET status = 'expired', decision_reason = 'Invalidated on process_restart' WHERE status IN ('pending', 'approved');`
 - Unconsumed `approved` tokens and `pending` tokens expire immediately.
-- `ApprovalRepository.consume_token` fails on expired authorizations (`status = 'consumed'` can only be transitioned from `status = 'approved'`).
-- Preserved states: `consumed`, `denied`, and previously `expired` records remain immutable.
+- Terminal resolution states remain immutable and preserved:
+  - `consumed`: preserved, cannot be re-consumed.
+  - `denied`: preserved, cannot be consumed.
+  - `expired`: preserved, cannot be consumed.
+  - `cancelled`: preserved (e.g. task cancelled by user/runtime), cannot be consumed (`consume_token` returns `False`).
 
 ---
 

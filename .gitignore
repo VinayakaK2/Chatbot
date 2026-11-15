@@ -38,3 +38,9 @@ logs/
 # Temporary screenshots & visual verification artifacts
 screenshot-*.png
 shot_*.png
+
+# SQLite Databases & WAL files
+*.db
+*.db-shm
+*.db-wal
+
