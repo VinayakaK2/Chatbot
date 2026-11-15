@@ -2,9 +2,10 @@
  * Accessible Dropdown / Popover Component.
  * Supports React Portal for unclipped floating menus, outside-click dismissal,
  * keyboard navigation (Escape, Enter), and boundary clamping.
+ * Supports both declarative item list and custom children markup.
  */
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 export interface DropdownItem {
@@ -19,7 +20,10 @@ export interface DropdownItem {
 
 export interface DropdownProps {
   trigger: React.ReactNode
-  items: DropdownItem[]
+  items?: DropdownItem[]
+  children?: React.ReactNode
+  isOpen?: boolean
+  onToggle?: () => void
   align?: 'left' | 'right' | 'right-outside'
   className?: string
   usePortal?: boolean
@@ -28,23 +32,29 @@ export interface DropdownProps {
 export const Dropdown: React.FC<DropdownProps> = ({
   trigger,
   items,
+  children,
+  isOpen: controlledIsOpen,
+  onToggle,
   align = 'right-outside',
   className = '',
   usePortal = true,
 }) => {
-  const [isOpen, setIsOpen] = useState(false)
+  const [internalIsOpen, setInternalIsOpen] = useState(false)
+  const isDropdownOpen = controlledIsOpen !== undefined ? controlledIsOpen : internalIsOpen
+
   const [coords, setCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   // Calculate coordinates when opening
-  const updatePosition = () => {
+  const updatePosition = useCallback(() => {
     const el = triggerRef.current || containerRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
     const menuWidth = 175
-    const menuHeight = items.length * 36 + 12
+    const itemCount = items?.length || 4
+    const menuHeight = itemCount * 36 + 12
 
     let top = rect.top - 2
     let left = rect.right + 6 // Default to right-outside (where "More options" opens)
@@ -75,17 +85,36 @@ export const Dropdown: React.FC<DropdownProps> = ({
     if (top < 8) top = 8
 
     setCoords({ top, left })
-  }
+  }, [align, items])
+
+  const closeDropdown = useCallback(() => {
+    if (controlledIsOpen !== undefined) {
+      if (onToggle && controlledIsOpen) onToggle()
+    } else {
+      setInternalIsOpen(false)
+    }
+  }, [controlledIsOpen, onToggle])
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!isOpen) {
+    if (!isDropdownOpen) {
       updatePosition()
-      setIsOpen(true)
+      if (controlledIsOpen !== undefined) {
+        if (onToggle) onToggle()
+      } else {
+        setInternalIsOpen(true)
+      }
     } else {
-      setIsOpen(false)
+      closeDropdown()
     }
   }
+
+  // Update position if dropdown is opened externally
+  useEffect(() => {
+    if (isDropdownOpen) {
+      updatePosition()
+    }
+  }, [isDropdownOpen, updatePosition])
 
   // Close on outside click or scroll
   useEffect(() => {
@@ -97,7 +126,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
         menuRef.current &&
         !menuRef.current.contains(target)
       ) {
-        setIsOpen(false)
+        closeDropdown()
       }
     }
 
@@ -106,10 +135,10 @@ export const Dropdown: React.FC<DropdownProps> = ({
       if (menuRef.current && menuRef.current.contains(event.target as Node)) {
         return
       }
-      setIsOpen(false)
+      closeDropdown()
     }
 
-    if (isOpen) {
+    if (isDropdownOpen) {
       document.addEventListener('mousedown', handleOutsideClick)
       window.addEventListener('scroll', handleScroll, true)
       window.addEventListener('resize', handleScroll)
@@ -119,12 +148,12 @@ export const Dropdown: React.FC<DropdownProps> = ({
       window.removeEventListener('scroll', handleScroll, true)
       window.removeEventListener('resize', handleScroll)
     }
-  }, [isOpen])
+  }, [isDropdownOpen, closeDropdown])
 
   // Handle keyboard events (Escape to close)
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Escape') {
-      setIsOpen(false)
+      closeDropdown()
     }
   }
 
@@ -142,30 +171,32 @@ export const Dropdown: React.FC<DropdownProps> = ({
       aria-orientation="vertical"
       onClick={(e) => e.stopPropagation()}
     >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`dropdown-item ${item.danger ? 'dropdown-item-danger is-danger' : ''}`.trim()}
-          disabled={item.disabled}
-          role="menuitem"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (item.onClick) {
-              item.onClick()
-            }
-            setIsOpen(false)
-          }}
-        >
-          {item.icon && <span className="dropdown-item-icon">{item.icon}</span>}
-          <div className="dropdown-item-content">
-            <span className="dropdown-item-label">{item.label}</span>
-            {item.description && (
-              <span className="dropdown-item-description">{item.description}</span>
-            )}
-          </div>
-        </button>
-      ))}
+      {items && items.length > 0
+        ? items.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`dropdown-item ${item.danger ? 'dropdown-item-danger is-danger' : ''}`.trim()}
+              disabled={item.disabled}
+              role="menuitem"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (item.onClick) {
+                  item.onClick()
+                }
+                closeDropdown()
+              }}
+            >
+              {item.icon && <span className="dropdown-item-icon">{item.icon}</span>}
+              <div className="dropdown-item-content">
+                <span className="dropdown-item-label">{item.label}</span>
+                {item.description && (
+                  <span className="dropdown-item-description">{item.description}</span>
+                )}
+              </div>
+            </button>
+          ))
+        : children}
     </div>
   )
 
@@ -181,16 +212,13 @@ export const Dropdown: React.FC<DropdownProps> = ({
         onClick={handleToggle}
         role="button"
         tabIndex={0}
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
+        aria-haspopup="true"
+        aria-expanded={isDropdownOpen}
       >
         {trigger}
       </div>
 
-      {isOpen &&
-        (usePortal && typeof document !== 'undefined'
-          ? createPortal(menuContent, document.body)
-          : menuContent)}
+      {isDropdownOpen && (usePortal ? createPortal(menuContent, document.body) : menuContent)}
     </div>
   )
 }

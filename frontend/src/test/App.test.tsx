@@ -47,11 +47,14 @@ vi.mock('../services/api-client', () => ({
       files: [],
     }),
     getAvailableDocuments: vi.fn().mockResolvedValue([]),
+    getCurrentWorkspace: vi.fn().mockResolvedValue(null),
+    listWorkspaces: vi.fn().mockResolvedValue([]),
+    selectWorkspace: vi.fn().mockResolvedValue({ status: 'ok', root_path: 'h:/chatbot' }),
   },
 }))
 
 describe('App Component', () => {
-  it('renders application shell with sidebar, workspace, and composer', async () => {
+  it('renders application shell with sidebar and no-project empty state initially', async () => {
     await act(async () => {
       render(<App />)
     })
@@ -60,7 +63,10 @@ describe('App Component', () => {
     expect(brandTitles.length).toBeGreaterThan(0)
     expect(screen.getByRole('navigation', { name: /Main sidebar/i })).toBeDefined()
     expect(screen.getByRole('main')).toBeDefined()
-    expect(screen.getByRole('textbox', { name: /Task prompt input/i })).toBeDefined()
+    // When no project is open, hero states "Select a Project Folder"
+    expect(screen.getByText('Select a Project Folder')).toBeDefined()
+    const openBtns = screen.getAllByRole('button', { name: /Open Project Folder/i })
+    expect(openBtns.length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /Command Palette/i })).toBeDefined()
   })
 
@@ -83,25 +89,27 @@ describe('App Component', () => {
     expect(screen.queryByPlaceholderText(/Type a command or search/i)).toBeNull()
   })
 
-  it('toggles sidebar collapse with Ctrl+B', async () => {
+  it('toggles sidebar collapse with Ctrl+B smoothly without unmounting', async () => {
     let containerRef: HTMLElement
     await act(async () => {
       const { container } = render(<App />)
       containerRef = container
     })
 
-    expect(containerRef!.querySelector('.sidebar-container')).toBeDefined()
+    const sidebar = containerRef!.querySelector('.sidebar-container')
+    expect(sidebar).not.toBeNull()
+    expect(sidebar?.classList.contains('is-collapsed')).toBe(false)
 
     // Press Ctrl+B to collapse
     await act(async () => {
       fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
     })
-    expect(containerRef!.querySelector('.sidebar-container')).toBeNull()
+    expect(sidebar?.classList.contains('is-collapsed')).toBe(true)
 
     // Press Ctrl+B to expand
     await act(async () => {
       fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
     })
-    expect(containerRef!.querySelector('.sidebar-container')).toBeDefined()
+    expect(sidebar?.classList.contains('is-collapsed')).toBe(false)
   })
 })

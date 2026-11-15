@@ -261,6 +261,7 @@ export interface Message {
 export interface Project {
   id: string
   name: string
+  path?: string
   description?: string
   color?: string
   created_at: string

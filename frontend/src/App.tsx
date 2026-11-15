@@ -21,6 +21,8 @@ import { useTaskStream } from './hooks/useTaskStream'
 import { useToast } from './hooks/useToast'
 import {
   IconFileCode,
+  IconFolder,
+  IconFolderPlus,
   IconSearch,
   IconShieldAlert,
   IconSidebar,
@@ -70,6 +72,10 @@ export const App: React.FC = () => {
   const {
     conversations,
     projects,
+    selectedProjectId,
+    selectProject,
+    createProject,
+    deleteProject,
     activeConversation,
     activeConversationId,
     createConversation,
@@ -134,40 +140,61 @@ export const App: React.FC = () => {
     }
   }, [])
 
-  // Probes active workspace information from backend
+  // Probes active workspace information from backend when a project is selected
   const refreshWorkspace = useCallback(async () => {
     try {
       const ws = await apiClient.getWorkspaceInfo()
-      setCurrentWorkspace(ws)
+      if (ws && ws.root_path) {
+        setCurrentWorkspace(ws)
+      }
     } catch {
-      setCurrentWorkspace({
-        root_path: 'H:\\chatbot',
-        name: 'chatbot',
-        exists: true,
-        is_git_repo: true,
-        current_branch: 'master',
-        total_files: 48,
-        limits: {
-          max_file_size_bytes: 10485760,
-          max_read_bytes: 262144,
-          max_directory_entries: 1000,
-          max_search_results: 200,
-          max_write_bytes: 5242880,
-          max_edit_bytes: 1048576,
-        },
-        tools: [],
-      })
+      // Do not hardcode any fallback workspace directory
+      setCurrentWorkspace(null)
     }
   }, [])
 
-  // Handles switching active workspace
+  // Handles switching active workspace from folder picker
   const handleWorkspaceSelected = useCallback(
     (newWs: WorkspaceInfo) => {
       setCurrentWorkspace(newWs)
+      const proj = createProject(newWs.name, newWs.root_path)
+      selectProject(proj.id)
       refreshGitDiff()
-      addToast(`Switched active workspace to ${newWs.name}`, 'info')
+      addToast(`Opened project folder: ${newWs.name}`, 'info')
     },
-    [refreshGitDiff, addToast]
+    [createProject, selectProject, refreshGitDiff, addToast]
+  )
+
+  // Handles switching projects from the sidebar
+  const handleSelectProject = useCallback(
+    async (projectId: string) => {
+      selectProject(projectId)
+      const target = projects.find((p) => p.id === projectId)
+      if (target?.path) {
+        try {
+          const ws = await apiClient.selectWorkspace(target.path)
+          setCurrentWorkspace(ws)
+          refreshGitDiff()
+        } catch (err) {
+          console.warn('Could not switch active workspace to project path:', err)
+        }
+      }
+    },
+    [projects, selectProject, refreshGitDiff]
+  )
+
+  // Creates a new conversation strictly within selected project
+  const handleNewConversation = useCallback(
+    (projectId?: string) => {
+      const targetProjId = projectId || selectedProjectId
+      if (!targetProjId && projects.length === 0) {
+        setIsWorkspaceSelectorOpen(true)
+        addToast('Please select or open a project folder first.', 'info')
+        return
+      }
+      createConversation(targetProjId || projects[0]?.id)
+    },
+    [selectedProjectId, projects, createConversation, addToast]
   )
 
   // Probes system health, model readiness, and workspace configuration from backend
@@ -531,6 +558,15 @@ export const App: React.FC = () => {
   // Handles submitting user messages and initiating model agent task
   const handleSendMessage = useCallback(
     (text: string, attachments: AttachedFile[], model: string) => {
+      const cleanText = text.trim()
+      if (!cleanText && attachments.length === 0) return
+
+      if (!selectedProjectId && projects.length === 0) {
+        setIsWorkspaceSelectorOpen(true)
+        addToast('Please open a project folder first before starting a conversation.', 'info')
+        return
+      }
+
       // Step 1: User message appears immediately
       const userMessage: Message = {
         id: `msg-${Date.now()}-user`,
@@ -664,10 +700,13 @@ export const App: React.FC = () => {
       <Sidebar
         conversations={conversations}
         projects={projects}
+        selectedProjectId={selectedProjectId}
         activeConversationId={activeConversationId}
         runningConversationIds={isExecuting && activeConversationId ? [activeConversationId] : []}
+        onSelectProject={handleSelectProject}
+        onDeleteProject={deleteProject}
         onSelectConversation={selectConversation}
-        onNewConversation={createConversation}
+        onNewConversation={handleNewConversation}
         onRenameConversation={renameConversation}
         onArchiveConversation={archiveConversation}
         onDeleteConversation={deleteConversation}
@@ -743,7 +782,32 @@ export const App: React.FC = () => {
 
           {/* Workspace Body: Empty State Hero OR Active Conversation */}
           <div className="workspace-body">
-          {isEmpty ? (
+          {!selectedProjectId && projects.length === 0 ? (
+            /* Intentionally Designed No-Project Empty State */
+            <div className="workspace-empty-view workspace-no-project-view">
+              <div className="empty-hero-container">
+                <div className="hero-emblem-box" aria-hidden="true">
+                  <IconFolder size={26} color="var(--color-file-text, #60a5fa)" />
+                </div>
+
+                <h1 className="hero-title">Select a Project Folder</h1>
+                <p className="hero-subtitle">
+                  Agent Runtime works on a local codebase. Select a project folder from your computer to start exploring, testing, and writing code.
+                </p>
+
+                <div className="no-project-action-box">
+                  <button
+                    type="button"
+                    className="no-project-select-btn"
+                    onClick={() => setIsWorkspaceSelectorOpen(true)}
+                  >
+                    <IconFolderPlus size={16} />
+                    <span>Open Project Folder</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : isEmpty ? (
             /* Intentionally Designed Centered Hero Empty State */
             <div className="workspace-empty-view">
               <div className="empty-hero-container">

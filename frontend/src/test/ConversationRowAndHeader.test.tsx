@@ -2,9 +2,18 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { Sidebar } from '../components/layout/Sidebar'
 import { MessageItem } from '../components/chat/MessageItem'
-import type { Conversation, Message } from '../types/api'
+import type { Conversation, Message, Project } from '../types/api'
 
 describe('ConversationRow & Status Indicators', () => {
+  const mockProjects: Project[] = [
+    {
+      id: 'p-1',
+      name: 'chatbot',
+      path: 'h:/chatbot',
+      created_at: new Date().toISOString(),
+    },
+  ]
+
   const mockConversations: Conversation[] = [
     {
       id: 'c-1',
@@ -43,11 +52,12 @@ describe('ConversationRow & Status Indicators', () => {
     },
   ]
 
-  it('renders status indicators for running and unread conversations', () => {
+  it('renders status indicators for running and unread conversations nested under selected project', () => {
     const { container } = render(
       <Sidebar
         conversations={mockConversations}
-        projects={[]}
+        projects={mockProjects}
+        selectedProjectId="p-1"
         activeConversationId="c-1"
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}
@@ -78,7 +88,8 @@ describe('ConversationRow & Status Indicators', () => {
     render(
       <Sidebar
         conversations={mockConversations}
-        projects={[]}
+        projects={mockProjects}
+        selectedProjectId="p-1"
         activeConversationId="c-3"
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}
@@ -112,7 +123,8 @@ describe('ConversationRow & Status Indicators', () => {
     render(
       <Sidebar
         conversations={mockConversations}
-        projects={[]}
+        projects={mockProjects}
+        selectedProjectId="p-1"
         activeConversationId="c-1"
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}
@@ -130,11 +142,35 @@ describe('ConversationRow & Status Indicators', () => {
     expect(onToggleCollapse).toHaveBeenCalledTimes(1)
   })
 
+  it('sidebar remains mounted when collapsed with smooth class and aria-hidden', () => {
+    const { container } = render(
+      <Sidebar
+        conversations={mockConversations}
+        projects={mockProjects}
+        selectedProjectId="p-1"
+        activeConversationId="c-1"
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        onTogglePinConversation={vi.fn()}
+        onOpenSettings={vi.fn()}
+        isCollapsed={true}
+        onToggleCollapse={vi.fn()}
+      />
+    )
+
+    const aside = container.querySelector('.sidebar-container')
+    expect(aside).not.toBeNull()
+    expect(aside?.classList.contains('is-collapsed')).toBe(true)
+    expect(aside?.getAttribute('aria-hidden')).toBe('true')
+  })
+
   it('renders search button in sidebar header next to collapse and toggles search field', () => {
     render(
       <Sidebar
         conversations={mockConversations}
-        projects={[]}
+        projects={mockProjects}
+        selectedProjectId="p-1"
         activeConversationId="c-1"
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}
@@ -159,35 +195,47 @@ describe('ConversationRow & Status Indicators', () => {
     expect(screen.getByPlaceholderText(/Search conversations/i)).toBeDefined()
   })
 
-  it('does NOT render Agent Runtime Core or Automations/Customizations', () => {
+  it('renders clean empty state when no project is open and removes Automations/Customizations', () => {
+    const onOpen = vi.fn()
     render(
       <Sidebar
-        conversations={mockConversations}
-        projects={[{ id: 'proj-default', name: 'Agent Runtime Core', created_at: new Date().toISOString() }]}
-        activeConversationId="c-1"
+        conversations={[]}
+        projects={[]}
+        activeConversationId={null}
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}
         onDeleteConversation={vi.fn()}
         onTogglePinConversation={vi.fn()}
         onOpenSettings={vi.fn()}
+        onOpenWorkspaceSelector={onOpen}
         isCollapsed={false}
         onToggleCollapse={vi.fn()}
       />
     )
 
-    // Agent Runtime Core must not be displayed
-    expect(screen.queryByText('Agent Runtime Core')).toBeNull()
-    // Automations and Customizations nav items must not be displayed
+    // Header displays ONLY "Agent Runtime"
+    expect(screen.getByText('Agent Runtime')).toBeDefined()
+
+    // Empty state message and button
+    expect(screen.getByText('No project folder open')).toBeDefined()
+    expect(screen.getByText('Select Folder')).toBeDefined()
+
+    // Clicking Select Folder calls onOpenWorkspaceSelector
+    fireEvent.click(screen.getByText('Select Folder'))
+    expect(onOpen).toHaveBeenCalledTimes(1)
+
+    // Automations, Customizations, and global Recent Conversations must NOT exist
     expect(screen.queryByText('Automations')).toBeNull()
     expect(screen.queryByText('Customizations')).toBeNull()
+    expect(screen.queryByText('Recent Conversations')).toBeNull()
   })
 
   it('opens filter and sort dropdown and allows switching sort order', () => {
     render(
       <Sidebar
         conversations={mockConversations}
-        projects={[]}
-        currentWorkspace={{ name: 'chatbot', root_path: 'h:/chatbot' } as any}
+        projects={mockProjects}
+        selectedProjectId="p-1"
         activeConversationId="c-1"
         onSelectConversation={vi.fn()}
         onNewConversation={vi.fn()}

@@ -1,7 +1,12 @@
 /**
  * Desktop AI Application Sidebar Component.
- * Supports project folders, nested conversations, search filter, pinning,
- * context actions (rename, delete), and smooth collapse.
+ * Strict project-scoped information architecture:
+ * - Brand: "Agent Runtime" only (no subtitles or breadcrumbs)
+ * - New Conversation
+ * - Projects section with folder selection & project-scoped nested conversations
+ * - User Profile & Settings at bottom
+ * - Zero global recent conversations
+ * - Smooth continuous collapse/expand transition (no abrupt display:none)
  */
 
 import React, { useState, useMemo, useRef, useEffect } from 'react'
@@ -30,8 +35,11 @@ import { Dropdown } from '../common/Dropdown'
 export interface SidebarProps {
   conversations: Conversation[]
   projects: Project[]
+  selectedProjectId?: string | null
   activeConversationId: string | null
   runningConversationIds?: string[]
+  onSelectProject?: (projectId: string) => void
+  onDeleteProject?: (projectId: string) => void
   onSelectConversation: (id: string) => void
   onNewConversation: (projectId?: string) => void
   onRenameConversation?: (id: string, newTitle: string) => void
@@ -98,27 +106,88 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
     window.location.search.includes('hover=2') &&
     chat.id === 'conv-demo-2'
 
+  const [isEditing, setIsEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(chat.title)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [isEditing])
+
+  const handleSaveRename = () => {
+    const trimmed = editTitle.trim()
+    if (trimmed && trimmed !== chat.title && onRename) {
+      onRename(chat.id, trimmed)
+    } else {
+      setEditTitle(chat.title)
+    }
+    setIsEditing(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveRename()
+    } else if (e.key === 'Escape') {
+      setEditTitle(chat.title)
+      setIsEditing(false)
+    }
+  }
+
   return (
     <div
-      className={`sidebar-chat-item ${isActive ? 'is-active' : ''} ${isSimulatedHover ? 'is-hovered' : ''}`.trim()}
-      onClick={() => onSelect(chat.id)}
+      className={`sidebar-chat-item ${isActive ? 'is-active' : ''} ${
+        isSimulatedHover ? 'is-hovered' : ''
+      }`}
+      onClick={() => {
+        if (!isEditing) onSelect(chat.id)
+      }}
       role="button"
       tabIndex={0}
+      aria-label={`Conversation: ${chat.title}${chat.pinned ? ' (Pinned)' : ''}${
+        isRunning ? ' (Running)' : ''
+      }`}
+      aria-current={isActive ? 'true' : undefined}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onSelect(chat.id)
+          if (!isEditing) onSelect(chat.id)
         }
       }}
-      aria-current={isActive ? 'page' : undefined}
     >
-      <span className="chat-item-title" title={chat.title}>
-        {chat.title}
-      </span>
+      {/* Leading Pin indicator badge for pinned chats */}
+      {chat.pinned && (
+        <span className="chat-pinned-badge" title="Pinned conversation" aria-hidden="true">
+          <IconPin size={11} color="var(--text-muted)" />
+        </span>
+      )}
+
+      {/* Main Conversation Title */}
+      <div className="chat-item-title-wrap">
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            className="chat-item-rename-input"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={handleSaveRename}
+            onKeyDown={handleKeyDown}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="Rename conversation"
+          />
+        ) : (
+          <span className="chat-item-title" title={chat.title}>
+            {chat.title}
+          </span>
+        )}
+      </div>
 
       {/* Trailing area: Actions (hover/focus) vs Status Indicator (normal) */}
       <div className="chat-item-trailing">
-        {/* Status Indicator or Relative Timestamp (Shown in normal state when mouse NOT hovering) */}
+        {/* Status Indicator or Relative Timestamp */}
         <div className="chat-status-indicator" aria-hidden="true">
           {isRunning ? (
             <span className="chat-spinner" title="Task running" />
@@ -130,8 +199,12 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
         </div>
 
         {/* Action Controls (Revealed on hover / focus) */}
-        <div className="chat-item-actions" onClick={(e) => e.stopPropagation()}>
-          {/* Quick Pin / Unpin button */}
+        <div
+          className="chat-item-actions"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {/* Quick Pin Toggle Button */}
           <button
             type="button"
             className={`chat-action-btn ${chat.pinned ? 'is-pinned' : ''}`}
@@ -142,58 +215,83 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
             title={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
             aria-label={chat.pinned ? 'Unpin conversation' : 'Pin conversation'}
           >
-            <IconPin size={14} />
+            <IconPin size={12} color={chat.pinned ? 'var(--text-primary)' : 'currentColor'} />
           </button>
 
-          {/* Three-dot More Options dropdown */}
+          {/* Context Menu Dropdown */}
           <Dropdown
+            isOpen={dropdownOpen}
+            onToggle={() => setDropdownOpen((prev) => !prev)}
             trigger={
               <button
                 type="button"
                 className="chat-action-btn"
                 title="More options"
                 aria-label="More options"
+                aria-expanded={dropdownOpen}
               >
-                <IconMoreVertical size={14} />
+                <IconMoreVertical size={13} />
               </button>
             }
-            items={[
-              {
-                id: 'rename',
-                label: 'Rename',
-                icon: <IconEdit size={13} />,
-                onClick: () => {
-                  const newTitle = window.prompt('Rename conversation:', chat.title)
-                  if (newTitle && onRename) onRename(chat.id, newTitle)
-                },
-              },
-              {
-                id: 'pin',
-                label: chat.pinned ? 'Unpin conversation' : 'Pin to top',
-                icon: <IconPin size={13} />,
-                onClick: () => onTogglePin(chat.id),
-              },
-              {
-                id: 'archive',
-                label: chat.archived ? 'Unarchive' : 'Archive',
-                icon: <IconArchive size={13} />,
-                onClick: () => onArchive?.(chat.id),
-              },
-              {
-                id: 'delete',
-                label: 'Delete conversation',
-                icon: <IconTrash size={13} />,
-                danger: true,
-                onClick: () => {
-                  if (window.confirm(`Delete conversation "${chat.title}"?`)) {
-                    onDelete(chat.id)
-                  }
-                },
-              },
-            ]}
-            align="right-outside"
-            usePortal={true}
-          />
+          >
+            {onRename && (
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  setDropdownOpen(false)
+                  setIsEditing(true)
+                }}
+                role="menuitem"
+              >
+                <IconEdit size={13} />
+                <span>Rename</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                setDropdownOpen(false)
+                onTogglePin(chat.id)
+              }}
+              role="menuitem"
+            >
+              <IconPin size={13} />
+              <span>{chat.pinned ? 'Unpin' : 'Pin'}</span>
+            </button>
+
+            {onArchive && (
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  setDropdownOpen(false)
+                  onArchive(chat.id)
+                }}
+                role="menuitem"
+              >
+                <IconArchive size={13} />
+                <span>{chat.archived ? 'Unarchive' : 'Archive'}</span>
+              </button>
+            )}
+
+            <div className="dropdown-divider" />
+
+            <button
+              type="button"
+              className="dropdown-item danger"
+              onClick={() => {
+                setDropdownOpen(false)
+                onDelete(chat.id)
+              }}
+              role="menuitem"
+            >
+              <IconTrash size={13} />
+              <span>Delete</span>
+            </button>
+          </Dropdown>
         </div>
       </div>
     </div>
@@ -203,8 +301,11 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
 export const Sidebar: React.FC<SidebarProps> = ({
   conversations,
   projects,
+  selectedProjectId,
   activeConversationId,
   runningConversationIds = [],
+  onSelectProject,
+  onDeleteProject: _onDeleteProject,
   onSelectConversation,
   onNewConversation,
   onRenameConversation,
@@ -214,7 +315,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   isCollapsed,
   onToggleCollapse,
-  currentWorkspace,
   onOpenWorkspaceSelector,
 }) => {
   const [searchQuery, setSearchQuery] = useState('')
@@ -233,10 +333,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false)
   const filterMenuRef = useRef<HTMLDivElement>(null)
 
-  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({
-    default: true,
-    'workspace-root-project': true,
-  })
+  // Expand all projects by default
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
 
   // Close filter dropdown on outside click
   useEffect(() => {
@@ -253,27 +351,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) => ({
       ...prev,
-      [projectId]: !prev[projectId],
+      [projectId]: !(prev[projectId] ?? true),
     }))
   }
-
-  // Display projects: explicitly filter out 'Agent Runtime Core' / 'proj-default'
-  const displayProjects = useMemo(() => {
-    const valid = projects.filter(
-      (p) => p.name !== 'Agent Runtime Core' && p.id !== 'proj-default'
-    )
-    if (valid.length > 0) return valid
-    if (currentWorkspace?.name) {
-      return [
-        {
-          id: 'workspace-root-project',
-          name: currentWorkspace.name,
-          created_at: new Date().toISOString(),
-        },
-      ]
-    }
-    return []
-  }, [projects, currentWorkspace])
 
   // Sort conversations dynamically based on user selection
   const sortedConversations = useMemo(() => {
@@ -304,114 +384,106 @@ export const Sidebar: React.FC<SidebarProps> = ({
     )
   }, [sortedConversations, searchQuery])
 
-  const pinnedConversations = useMemo(
-    () => filteredConversations.filter((c) => c.pinned && !c.archived),
-    [filteredConversations]
-  )
-  const unpinnedConversations = useMemo(
-    () => filteredConversations.filter((c) => !c.pinned && !c.archived),
-    [filteredConversations]
-  )
-
-  if (isCollapsed) {
-    return null
-  }
-
   return (
-    <aside className="sidebar-container" role="navigation" aria-label="Main sidebar">
-      {/* Brand Header */}
-      <div className="sidebar-header">
-        <div className="sidebar-brand">
-          <div className="brand-icon-box">
-            <IconBot size={18} color="var(--accent-primary)" />
+    <aside
+      className={`sidebar-container ${isCollapsed ? 'is-collapsed' : ''}`}
+      role="navigation"
+      aria-label="Main sidebar"
+      aria-hidden={isCollapsed}
+    >
+      <div className="sidebar-content-wrapper">
+        {/* 1. Brand Header: "Agent Runtime" ONLY (no subtitle/breadcrumb) */}
+        <div className="sidebar-header">
+          <div className="sidebar-brand">
+            <div className="brand-icon-box">
+              <IconBot size={18} color="var(--accent-primary)" />
+            </div>
+            <div className="brand-text">
+              <span className="brand-title">Agent Runtime</span>
+            </div>
           </div>
-          <div className="brand-text">
-            <span className="brand-title">Agent Runtime</span>
+
+          <div className="sidebar-header-actions">
+            {/* Search conversations toggle icon */}
             <button
               type="button"
-              className="sidebar-workspace-pill"
-              onClick={onOpenWorkspaceSelector}
-              title={`Active Workspace: ${currentWorkspace?.root_path || 'Select folder'}`}
-              aria-label="Open Workspace Selector"
+              className={`sidebar-header-btn ${isSearchOpen ? 'is-active' : ''}`}
+              onClick={() => {
+                setIsSearchOpen((prev) => !prev)
+                if (isSearchOpen) {
+                  setSearchQuery('')
+                }
+              }}
+              title="Search conversations"
+              aria-label="Search conversations"
             >
-              <IconFolder size={11} color="var(--accent-primary)" />
-              <span className="sidebar-workspace-name">{currentWorkspace?.name || 'Workspace'}</span>
+              <IconSearch size={15} />
+            </button>
+
+            {/* Collapse sidebar button */}
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              onClick={onToggleCollapse}
+              title="Collapse sidebar (Ctrl+B)"
+              aria-label="Collapse sidebar"
+            >
+              <IconSidebar size={16} />
             </button>
           </div>
         </div>
 
-        <div className="sidebar-header-actions">
-          {/* Search conversations toggle icon */}
+        {/* 2. New Conversation Button (Capsule Shape) */}
+        <div className="sidebar-action-bar">
           <button
             type="button"
-            className={`sidebar-header-btn ${isSearchOpen ? 'is-active' : ''}`}
+            className="sidebar-new-chat-btn"
             onClick={() => {
-              setIsSearchOpen((prev) => !prev)
-              if (isSearchOpen) {
-                setSearchQuery('')
+              if (!selectedProjectId && projects.length === 0) {
+                if (onOpenWorkspaceSelector) onOpenWorkspaceSelector()
+              } else {
+                onNewConversation(selectedProjectId || projects[0]?.id)
               }
             }}
-            title="Search conversations"
-            aria-label="Search conversations"
+            title={
+              !selectedProjectId && projects.length === 0
+                ? 'Open a project folder to start a conversation'
+                : 'Start a new conversation in current project'
+            }
           >
-            <IconSearch size={15} />
-          </button>
-
-          {/* Collapse sidebar button */}
-          <button
-            type="button"
-            className="sidebar-collapse-btn"
-            onClick={onToggleCollapse}
-            title="Collapse sidebar (Ctrl+B)"
-            aria-label="Collapse sidebar"
-          >
-            <IconSidebar size={16} />
+            <IconPlus size={15} />
+            <span>New Conversation</span>
           </button>
         </div>
-      </div>
 
-      {/* New Conversation Button */}
-      <div className="sidebar-action-bar">
-        <button
-          type="button"
-          className="sidebar-new-chat-btn"
-          onClick={() => onNewConversation()}
-        >
-          <IconPlus size={15} />
-          <span>New Conversation</span>
-        </button>
-      </div>
+        {/* Search Field (Only shown when search icon is clicked) */}
+        {isSearchOpen && (
+          <div className="sidebar-search-box is-active">
+            <IconSearch size={14} color="var(--text-muted)" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search conversations..."
+              className="sidebar-search-input"
+              aria-label="Search conversation history"
+              autoFocus
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="sidebar-search-clear"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+              >
+                <IconX size={12} />
+              </button>
+            )}
+          </div>
+        )}
 
-      {/* Search Field (Only shown when search icon is clicked) */}
-      {isSearchOpen && (
-        <div className="sidebar-search-box is-active">
-          <IconSearch size={14} color="var(--text-muted)" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search conversations..."
-            className="sidebar-search-input"
-            aria-label="Search conversation history"
-            autoFocus
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              className="sidebar-search-clear"
-              onClick={() => setSearchQuery('')}
-              aria-label="Clear search"
-            >
-              <IconX size={12} />
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Scrollable Conversation History & Projects */}
-      <div className="sidebar-scroll-area">
-        {/* Projects Folders Section */}
-        {displayProjects.length > 0 && (
+        {/* 3. Scrollable Project Hierarchy (No global recent conversations) */}
+        <div className="sidebar-scroll-area">
           <div className="sidebar-section">
             <div className="sidebar-section-header-row">
               <span className="sidebar-section-title">Projects</span>
@@ -438,7 +510,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           try {
                             localStorage.setItem('agent_conversations_sort_by', 'updated')
                           } catch {
-                            // Ignore localStorage write failures
+                            // Ignore
                           }
                           setIsFilterMenuOpen(false)
                         }}
@@ -456,7 +528,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           try {
                             localStorage.setItem('agent_conversations_sort_by', 'name')
                           } catch {
-                            // Ignore localStorage write failures
+                            // Ignore
                           }
                           setIsFilterMenuOpen(false)
                         }}
@@ -474,7 +546,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           try {
                             localStorage.setItem('agent_conversations_sort_by', 'created')
                           } catch {
-                            // Ignore localStorage write failures
+                            // Ignore
                           }
                           setIsFilterMenuOpen(false)
                         }}
@@ -509,133 +581,126 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     type="button"
                     className="sidebar-section-icon-btn"
                     onClick={onOpenWorkspaceSelector}
-                    title="Open workspace folder"
-                    aria-label="Open workspace folder"
+                    title="Open or add project folder"
+                    aria-label="Open project folder"
                   >
                     <IconFolderPlus size={13} />
                   </button>
                 )}
               </div>
             </div>
-            {displayProjects.map((proj) => {
-              const isExpanded = !!expandedProjects[proj.id]
-              const projectChats = filteredConversations.filter(
-                (c) =>
-                  c.project_id === proj.id ||
-                  (proj.id === 'workspace-root-project' &&
-                    (!c.project_id || c.project_id === 'proj-default' || c.project_id === 'workspace-root-project'))
-              )
 
-              return (
-                <div key={proj.id} className="project-group">
-                  <div
-                    className="project-row"
-                    onClick={() => toggleProject(proj.id)}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={isExpanded}
-                  >
-                    {isExpanded ? (
-                      <IconChevronDown size={14} />
-                    ) : (
-                      <IconChevronRight size={14} />
-                    )}
-                    <IconFolder size={14} color="var(--color-file-text, #60a5fa)" />
-                    <span className="project-name project-name-blue">{proj.name}</span>
-                    <span className="project-count">{projectChats.length}</span>
-                  </div>
-
-                  {isExpanded && projectChats.length > 0 && (
-                    <div className="project-nested-chats">
-                      {projectChats.map((chat) => (
-                        <ConversationRow
-                          key={chat.id}
-                          chat={chat}
-                          isActive={chat.id === activeConversationId}
-                          isRunning={!!chat.is_running || runningConversationIds.includes(chat.id)}
-                          isUnread={!!chat.unread && chat.id !== activeConversationId}
-                          onSelect={onSelectConversation}
-                          onTogglePin={onTogglePinConversation}
-                          onRename={onRenameConversation}
-                          onArchive={onArchiveConversation}
-                          onDelete={onDeleteConversation}
-                        />
-                      ))}
-                    </div>
-                  )}
+            {/* Empty State when no project is open */}
+            {projects.length === 0 ? (
+              <div className="sidebar-projects-empty">
+                <div className="empty-project-icon" aria-hidden="true">
+                  <IconFolder size={18} color="var(--text-muted)" />
                 </div>
-              )
-            })}
-          </div>
-        )}
+                <span className="empty-project-title">No project folder open</span>
+                <span className="empty-project-desc">Select a folder to start working with the agent.</span>
+                {onOpenWorkspaceSelector && (
+                  <button
+                    type="button"
+                    className="sidebar-empty-open-btn"
+                    onClick={onOpenWorkspaceSelector}
+                  >
+                    <IconPlus size={12} />
+                    <span>Select Folder</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Projects List & Nested Conversations */
+              projects.map((proj) => {
+                const isSelected = proj.id === selectedProjectId
+                const isExpanded = expandedProjects[proj.id] ?? true
+                const projectChats = filteredConversations.filter(
+                  (c) => c.project_id === proj.id
+                )
 
-        {/* Pinned Section */}
-        {pinnedConversations.length > 0 && (
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">
-              <IconPin size={11} />
-              <span>PINNED</span>
-            </div>
-            {pinnedConversations.map((chat) => (
-              <ConversationRow
-                key={chat.id}
-                chat={chat}
-                isActive={chat.id === activeConversationId}
-                isRunning={!!chat.is_running || runningConversationIds.includes(chat.id)}
-                isUnread={!!chat.unread && chat.id !== activeConversationId}
-                onSelect={onSelectConversation}
-                onTogglePin={onTogglePinConversation}
-                onRename={onRenameConversation}
-                onArchive={onArchiveConversation}
-                onDelete={onDeleteConversation}
-              />
-            ))}
-          </div>
-        )}
+                return (
+                  <div key={proj.id} className={`project-group ${isSelected ? 'is-selected-project' : ''}`}>
+                    <div
+                      className={`project-row ${isSelected ? 'is-active-project' : ''}`}
+                      onClick={() => {
+                        if (onSelectProject) onSelectProject(proj.id)
+                        toggleProject(proj.id)
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
+                      title={`Project: ${proj.name} (${proj.path || 'Workspace'})`}
+                    >
+                      <span className="project-chevron-wrap">
+                        {isExpanded ? (
+                          <IconChevronDown size={14} />
+                        ) : (
+                          <IconChevronRight size={14} />
+                        )}
+                      </span>
+                      <IconFolder size={14} color="var(--color-file-text, #60a5fa)" />
+                      <span className="project-name project-name-blue">{proj.name}</span>
+                      <span className="project-count">{projectChats.length}</span>
+                    </div>
 
-        {/* Recent Conversations Section */}
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">RECENT CONVERSATIONS</div>
-          {unpinnedConversations.length === 0 ? (
-            <div className="sidebar-empty-state">No conversations found</div>
-          ) : (
-            unpinnedConversations.map((chat) => (
-              <ConversationRow
-                key={chat.id}
-                chat={chat}
-                isActive={chat.id === activeConversationId}
-                isRunning={!!chat.is_running || runningConversationIds.includes(chat.id)}
-                isUnread={!!chat.unread && chat.id !== activeConversationId}
-                onSelect={onSelectConversation}
-                onTogglePin={onTogglePinConversation}
-                onRename={onRenameConversation}
-                onArchive={onArchiveConversation}
-                onDelete={onDeleteConversation}
-              />
-            ))
-          )}
+                    {isExpanded && (
+                      <div className="project-nested-chats">
+                        {projectChats.length === 0 ? (
+                          <div className="project-empty-chats">
+                            <span>No conversations yet</span>
+                            <button
+                              type="button"
+                              className="project-new-chat-link"
+                              onClick={() => onNewConversation(proj.id)}
+                            >
+                              + New chat
+                            </button>
+                          </div>
+                        ) : (
+                          projectChats.map((chat) => (
+                            <ConversationRow
+                              key={chat.id}
+                              chat={chat}
+                              isActive={chat.id === activeConversationId}
+                              isRunning={!!chat.is_running || runningConversationIds.includes(chat.id)}
+                              isUnread={!!chat.unread && chat.id !== activeConversationId}
+                              onSelect={onSelectConversation}
+                              onTogglePin={onTogglePinConversation}
+                              onRename={onRenameConversation}
+                              onArchive={onArchiveConversation}
+                              onDelete={onDeleteConversation}
+                            />
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* Fixed Bottom Settings & Profile Area */}
-      <div className="sidebar-footer">
-        <div className="sidebar-footer-row">
-          <div className="sidebar-user-profile" title="Signed in as Vinayaka K">
-            <div className="user-avatar">
-              <span className="user-initials">VK</span>
+        {/* 4. Fixed Bottom Settings & Profile Area */}
+        <div className="sidebar-footer">
+          <div className="sidebar-footer-row">
+            <div className="sidebar-user-profile" title="Signed in as Vinayaka K">
+              <div className="user-avatar">
+                <span className="user-initials">VK</span>
+              </div>
+              <span className="user-name">Vinayaka K</span>
             </div>
-            <span className="user-name">Vinayaka K</span>
-          </div>
 
-          <button
-            type="button"
-            className="sidebar-settings-btn"
-            onClick={onOpenSettings}
-            title="Open workspace settings (Ctrl+,)"
-            aria-label="Workspace settings"
-          >
-            <IconSettings size={16} />
-          </button>
+            <button
+              type="button"
+              className="sidebar-settings-btn"
+              onClick={onOpenSettings}
+              title="Open workspace settings (Ctrl+,)"
+              aria-label="Workspace settings"
+            >
+              <IconSettings size={16} />
+            </button>
+          </div>
         </div>
       </div>
     </aside>
