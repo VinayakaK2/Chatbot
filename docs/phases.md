@@ -767,7 +767,7 @@ Longer sessions can continue with bounded context and traceable source history.
 
 **Status:** FROZEN · PERMANENTLY LOCKED  
 **Formal Freeze Decision:** APPROVED by Operator on 2026-11-15  
-**HEAD Commit at Freeze:** `3a9a378`  
+**HEAD Commit at Freeze:** `7839890`  
 **Authoritative Evidence Artifacts:**
 - Design Specification: [`docs/reports/phase-7/phase-7-design.md`](reports/phase-7/phase-7-design.md)
 - Implementation Report: [`docs/reports/phase-7/phase-7-implementation-report.md`](reports/phase-7/phase-7-implementation-report.md)
