@@ -64,6 +64,24 @@ class TaskCreateRequest(BaseModel):
             raise ValueError("Prompt cannot be empty or contain only whitespace characters")
         return stripped
 
+    @field_validator("correlation_id")
+    @classmethod
+    def validate_correlation_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate correlation ID format and protect against log/header injection."""
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if len(stripped) > 128:
+            raise ValueError("correlation_id must not exceed 128 characters")
+        if any(c in stripped for c in "\r\n\x00"):
+            raise ValueError("correlation_id contains illegal control or newline characters")
+        import re
+        if not re.match(r"^[a-zA-Z0-9_\-\.]{1,128}$", stripped):
+            raise ValueError("correlation_id must match regex '^[a-zA-Z0-9_\\-\\.]{1,128}$'")
+        return stripped
+
 
 class TaskResponse(BaseModel):
     """Standardized task result and execution summary response."""

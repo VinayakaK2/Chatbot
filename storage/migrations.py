@@ -484,6 +484,9 @@ class MigrationRunner:
                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
                 verification_type TEXT NOT NULL CHECK(verification_type IN ('test', 'build', 'lint', 'typecheck', 'custom')),
                 command TEXT NOT NULL,
+                origin TEXT NOT NULL DEFAULT 'configured_profile',
+                profile_name TEXT DEFAULT NULL,
+                authorized_by TEXT DEFAULT NULL,
                 exit_code INTEGER DEFAULT NULL,
                 result TEXT NOT NULL CHECK(result IN ('not_run', 'passed', 'failed', 'inconclusive', 'blocked')),
                 output_excerpt TEXT DEFAULT NULL,
@@ -493,6 +496,15 @@ class MigrationRunner:
             );
             """
         )
+        cursor.execute("PRAGMA table_info(verification_records);")
+        vr_cols = [row[1] for row in cursor.fetchall()]
+        if "origin" not in vr_cols:
+            cursor.execute("ALTER TABLE verification_records ADD COLUMN origin TEXT NOT NULL DEFAULT 'configured_profile';")
+        if "profile_name" not in vr_cols:
+            cursor.execute("ALTER TABLE verification_records ADD COLUMN profile_name TEXT DEFAULT NULL;")
+        if "authorized_by" not in vr_cols:
+            cursor.execute("ALTER TABLE verification_records ADD COLUMN authorized_by TEXT DEFAULT NULL;")
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_task ON verification_records(task_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_result ON verification_records(result);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_correlation ON verification_records(correlation_id);")

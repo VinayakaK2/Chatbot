@@ -1,14 +1,25 @@
 """Tests for independent verification execution, decoupled task vs verification status, and bounded output."""
 
 import asyncio
+import os
 from pathlib import Path
+import subprocess
+import sys
 import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.schemas.tasks import TaskCreateRequest, TaskStatus
 from core.task_service import TaskService
-from core.verification import VerificationRunner, truncate_output_middle
+from core.verification import (
+    BoundedStreamCapture,
+    DEFAULT_VERIFICATION_PROFILES,
+    VerificationOrigin,
+    VerificationRunner,
+    _terminate_process_tree,
+    truncate_output_middle,
+    validate_verification_command,
+)
 from storage.database import DatabaseManager
 from storage.migrations import MigrationRunner
 from storage.models import TaskRecord, VerificationRecord, VerificationStatus, VerificationType
@@ -188,3 +199,181 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     task_resp = client.get(f"/api/tasks/{task_id}")
     assert task_resp.status_code == 200
     assert task_resp.json()["verification_status"] == "passed"
+
+
+def test_verification_rejects_trivial_and_unsafe_commands() -> None:
+    """Verify F8-01 trust boundary: self-certification and injection commands are rejected."""
+    # 1. Trivial pass commands
+    for trivial in ["echo 'tests passed'", "echo passed", "true", "exit 0", "printf 'ok'", ":"]:
+        with pytest.raises(ValueError, match="Trivial self-certification commands"):
+            validate_verification_command(trivial)
+
+    # 2. Unquoted shell chaining
+    for chaining in ["pytest && echo done", "pytest || true", "pytest ; rm -rf /", "pytest | grep ok"]:
+        with pytest.raises(ValueError, match="Shell chaining"):
+            validate_verification_command(chaining, allow_shell_chaining=False)
+
+    # 3. Valid commands succeed
+    validate_verification_command("pytest tests/ -v")
+    validate_verification_command("python -m unittest discover")
+
+
+@pytest.mark.asyncio
+async def test_verification_profile_resolution(temp_db: DatabaseManager) -> None:
+    """Verify pre-approved profile resolution and provenance tracking."""
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Run profile verification")
+    repo = VerificationRepository(temp_db)
+    runner = VerificationRunner(
+        verification_repo=repo,
+        profiles={"custom_check": "python -c \"print('CUSTOM_PROFILE_OK')\""},
+    )
+
+    record = await runner.run_verification(
+        task_id=task.id,
+        profile_name="custom_check",
+        origin=VerificationOrigin.CONFIGURED_PROFILE,
+        authorized_by="system_policy",
+    )
+
+    assert record.result == VerificationStatus.PASSED
+    assert record.origin == "configured_profile"
+    assert record.profile_name == "custom_check"
+    assert record.authorized_by == "system_policy"
+    assert "CUSTOM_PROFILE_OK" in (record.output_excerpt or "")
+
+    # Unknown profile rejected
+    with pytest.raises(ValueError, match="Unknown verification profile"):
+        await runner.run_verification(
+            task_id=task.id,
+            profile_name="non_existent_profile",
+        )
+
+
+@pytest.mark.asyncio
+async def test_verification_bounded_stream_capture_large_output(temp_db: DatabaseManager) -> None:
+    """Verify F8-02: BoundedStreamCapture limits memory at capture time for multi-megabyte streams."""
+    # 1. Direct stream test with 10MB of data
+    capture = BoundedStreamCapture(max_bytes=65536)
+    chunk = b"A" * 4096
+    total_written = 0
+
+    class MockStream:
+        def __init__(self, chunks_count: int) -> None:
+            self.remaining = chunks_count
+
+        async def read(self, n: int) -> bytes:
+            if self.remaining <= 0:
+                return b""
+            self.remaining -= 1
+            return chunk
+
+    mock_stream = MockStream(chunks_count=2500)  # 2500 * 4KB = 10MB
+    await capture.consume_stream(mock_stream)
+
+    assert capture.total_bytes == 2500 * 4096
+    assert len(capture.head_buffer) == capture.half_bytes
+    assert len(capture.tail_buffer) == capture.half_bytes
+    # Capture-time memory in buffers is capped strictly within max_bytes
+    assert (len(capture.head_buffer) + len(capture.tail_buffer)) <= 65536
+    bounded_text = capture.get_bounded_text()
+    assert "... [STREAMED OUTPUT TRUNCATED: 10240000 bytes streamed" in bounded_text
+
+    # 2. Subprocess execution with 2MB stdout
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Stream massive output")
+    repo = VerificationRepository(temp_db)
+    runner = VerificationRunner(verification_repo=repo, default_timeout_seconds=15.0)
+
+    record = await runner.run_verification(
+        task_id=task.id,
+        command="python -c \"import sys; [sys.stdout.write(f'LINE {i}\\n') for i in range(15000)]\"",
+        origin=VerificationOrigin.OPERATOR,
+        authorized_by="operator",
+    )
+
+    assert record.result == VerificationStatus.PASSED
+    assert record.exit_code == 0
+    assert "LINE 0" in (record.output_excerpt or "")
+    assert "LINE 14999" in (record.output_excerpt or "")
+    assert "[STREAMED OUTPUT TRUNCATED:" in (record.output_excerpt or "")
+    assert len((record.output_excerpt or "").encode("utf-8")) < 75000
+
+
+@pytest.mark.asyncio
+async def test_verification_cancellation(temp_db: DatabaseManager) -> None:
+    """Verify cooperative cancellation terminates subprocess promptly and records FAILED."""
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Long running test to cancel")
+    repo = VerificationRepository(temp_db)
+    runner = VerificationRunner(verification_repo=repo, default_timeout_seconds=30.0)
+
+    token = asyncio.Event()
+
+    # Schedule cancellation 0.5s after start
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.5, token.set)
+
+    record = await runner.run_verification(
+        task_id=task.id,
+        command="python -c \"import time; time.sleep(20)\"",
+        origin=VerificationOrigin.OPERATOR,
+        cancellation_token=token,
+    )
+
+    assert record.result == VerificationStatus.FAILED
+    assert record.exit_code == -1
+    assert "cancelled by user" in (record.output_excerpt or "")
+
+
+@pytest.mark.asyncio
+async def test_verification_process_tree_termination(temp_db: DatabaseManager, tmp_path: Path) -> None:
+    """Verify F8-04: multi-level process tree (child and grandchild) is completely killed on timeout."""
+    pid_file = tmp_path / "grandchild.pid"
+    script_file = tmp_path / "spawner.py"
+
+    # Spawner script: spawns a grandchild process running a 60s sleep, writes grandchild PID, then sleeps 60s
+    script_content = f"""
+import subprocess, sys, time
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+with open(r"{pid_file.as_posix()}", "w") as f:
+    f.write(str(gc.pid))
+    f.flush()
+time.sleep(60)
+"""
+    script_file.write_text(script_content, encoding="utf-8")
+
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Process tree test")
+    repo = VerificationRepository(temp_db)
+    runner = VerificationRunner(verification_repo=repo, default_timeout_seconds=1.0)
+
+    record = await runner.run_verification(
+        task_id=task.id,
+        command=f'python "{script_file.as_posix()}"',
+        origin=VerificationOrigin.OPERATOR,
+        timeout_seconds=1.5,
+    )
+
+    assert record.result == VerificationStatus.FAILED
+    assert record.exit_code == -1
+    assert "exceeded timeout limit" in (record.output_excerpt or "")
+
+    # Grandchild PID must have been recorded
+    assert pid_file.exists(), "Grandchild PID file was not created"
+    gc_pid = int(pid_file.read_text().strip())
+
+    # Wait 0.5s for OS to clean up terminated process
+    await asyncio.sleep(0.5)
+
+    # Verify grandchild PID is no longer running
+    if os.name == "nt":
+        res = subprocess.run(["tasklist", "/FI", f"PID eq {gc_pid}"], capture_output=True, text=True)
+        assert str(gc_pid) not in res.stdout, f"Grandchild process PID {gc_pid} is still alive!"
+    else:
+        try:
+            os.kill(gc_pid, 0)
+            pytest.fail(f"Grandchild process PID {gc_pid} is still alive!")
+        except OSError:
+            pass  # Terminated cleanly
+

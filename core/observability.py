@@ -64,6 +64,21 @@ def get_current_session_id() -> Optional[str]:
     return _current_session_id.get()
 
 
+def sanitize_correlation_id(cid: Optional[str]) -> str:
+    """Validate and sanitize correlation ID against log injection and unbounded length."""
+    if not cid or not str(cid).strip():
+        return str(uuid.uuid4())
+    s = str(cid).strip()
+    if len(s) > 128 or any(c in s for c in "\r\n\x00"):
+        logger.warning("Unsafe correlation ID rejected due to control characters or length; regenerated UUID.")
+        return str(uuid.uuid4())
+    import re
+    if not re.match(r"^[a-zA-Z0-9_\-\.]{1,128}$", s):
+        logger.warning("Unsafe correlation ID rejected due to invalid characters; regenerated UUID.")
+        return str(uuid.uuid4())
+    return s
+
+
 @contextmanager
 def correlation_context(
     correlation_id: Optional[str] = None,
@@ -71,7 +86,7 @@ def correlation_context(
     session_id: Optional[str] = None,
 ) -> Generator[str, None, None]:
     """Context manager binding correlation and task IDs to current async task."""
-    effective_cid = correlation_id or str(uuid.uuid4())
+    effective_cid = sanitize_correlation_id(correlation_id) if correlation_id else str(uuid.uuid4())
     token_cid = _current_correlation_id.set(effective_cid)
     token_task = _current_task_id.set(task_id) if task_id else None
     token_session = _current_session_id.set(session_id) if session_id else None

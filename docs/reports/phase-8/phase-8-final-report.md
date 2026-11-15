@@ -3,22 +3,25 @@
 **Date:** 2026-11-15  
 **Role:** Project Orchestrator & Forensic Lead  
 **Status:** Complete — Ready for Explicit Operator Freeze  
+**Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 baseline) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree  
 
 ---
 
 ## 1. Executive Summary
 
-Phase 8 is complete. The Chatbot Agent Runtime now possesses:
-1. **Traceability:** Ambient correlation IDs propagating across sessions, tasks, model requests, tool calls, and lifecycle events.
-2. **Durable Observability:** Standardized dot-delimited lifecycle events (`EventType`) persisted in SQLite and streamed via SSE.
+Phase 8 is complete. Following rigorous engineering critique addressing findings F8-01 through F8-04, the Chatbot Agent Runtime now possesses:
+1. **Traceability:** Ambient correlation IDs propagating across sessions, tasks, model requests, tool calls, and lifecycle events, strictly validated against CRLF injection (`\r\n\x00`) and length limits (`^[a-zA-Z0-9_\-\.]{1,128}$`).
+2. **Durable Observability:** Standardized dot-delimited lifecycle events (`EventType`) persisted in SQLite and streamed via SSE, with query pagination support (`limit` and `offset`).
 3. **Bounded Execution:** Explicit model timeouts, subprocess timeouts, and token budgets.
-4. **Resilient Retries:** Failure classification (transient vs permanent) with jittered exponential backoff and `Retry-After` header parsing; non-idempotent operations fail-closed.
-5. **Clean Cancellation & Graceful Shutdown:** Thread-safe cancellation token propagation, linearizable first-to-commit policy, and graceful ASGI shutdown hooks.
-6. **Active Loop Defense:** Canonical SHA-256 tool call hashing detecting identical consecutive failures and alternating ping-pong cycles.
-7. **Authoritative Verification Evidence:** Controlled subprocess test/build execution capturing exit codes, timestamps, and bounded output.
-8. **Decoupled Verification Status:** Untrusted model completion claims cannot self-certify; `TaskStatus` and `VerificationStatus` remain strictly distinct.
-9. **Secret Scrubbing & Log Caps:** Zero plaintext credentials in logs, events, or verification records; hard 64KB middle truncation cap.
-10. **CLI Diagnostics:** Secret-masked diagnostic utility (`chatbot-diagnostics`) and REST health endpoint (`GET /api/diagnostics`).
+4. **Resilient Retries:** Failure classification (transient vs permanent) with jittered exponential backoff, `Retry-After` header parsing clamped to 60.0s max, and cooperative backoff cancellation; non-idempotent operations fail-closed.
+5. **Clean Cancellation & Graceful Shutdown:** Thread-safe cancellation token propagation, linearizable first-to-commit policy, and graceful ASGI shutdown hooks with deadline escalation.
+6. **Active Loop Defense:** Canonical SHA-256 tool call hashing detecting identical consecutive failures (threshold=3) and alternating ping-pong cycles (`A -> B -> A -> B`, threshold=2).
+7. **Verification Trust Boundary & Provenance (F8-01):** Pre-approved profiles (`DEFAULT_VERIFICATION_PROFILES`) and explicit operator authorization, rejection of trivial self-certification commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`), with clean environment allowlists (`_build_safe_env`).
+8. **Capture-Time Streaming Memory Bound (F8-02):** Subprocess output consumed in 4KB chunks via `BoundedStreamCapture` (32KB head + 32KB circular deque tail), capping capture-time memory at `<= 64KB` in RAM regardless of stream size.
+9. **Multi-Level Process Tree Termination (F8-04):** Cross-platform termination (`taskkill /F /T` on Windows / SIGKILL on POSIX) terminating both child and grandchild subprocesses on timeout or cancellation, verified empirically.
+10. **Decoupled Verification Status:** Untrusted model completion claims cannot self-certify; `TaskStatus` and `VerificationStatus` remain strictly distinct.
+11. **Defense-in-Depth Secret Scrubbing (F8-03):** Recognized credential patterns (AWS keys, JWTs, URLs with embedded passwords, private key blocks, bearer/basic tokens) recursively scrubbed from nested dicts, lists, and exception messages prior to persistence.
+12. **CLI Diagnostics:** Secret-masked diagnostic utility (`chatbot-diagnostics`) and REST health endpoint (`GET /api/diagnostics`).
 
 ---
 
@@ -35,16 +38,16 @@ flowchart TD
         E --> F{"LoopDetector Check"}
         F -- "Loop Detected" --> G["Emit tool.loop.detected & Terminate Turn"]
         F -- "OK" --> H["Model Adapter Call with RetryPolicy"]
-        H -- "Transient (429/503)" --> I["Jittered Exponential Backoff"]
+        H -- "Transient (429/503)" --> I["Jittered Exponential Backoff (Clamp 60s)"]
         I --> H
         H -- "Success" --> J["Tool Dispatcher (Policy & Permissions)"]
         J -- "Mutating Tool" --> K["Fail-Closed Idempotency Guard"]
         J -- "Approved Tool" --> L["Subprocess Shell Execution with Timeout"]
     end
     
-    L --> M["Capture Exit Code & 64KB Bounded Output"]
-    M --> N["Independent VerificationRunner"]
-    N --> O["Record in verification_records Table"]
+    L --> M["Incremental BoundedStreamCapture (Max 64KB RAM)"]
+    M --> N["Independent VerificationRunner (Profile / Operator Auth)"]
+    N --> O["Record in verification_records Table (with Provenance)"]
     O --> P["Set Authoritative verification_status"]
     
     subgraph Terminal State
@@ -60,14 +63,14 @@ flowchart TD
 
 | Test Domain | Tests Run | Passed | Failed | Skipped | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `tests/test_retries.py` (Work Item 4) | 9 | 9 | 0 | 0 | **PASS** |
-| `tests/test_loop_detector.py` (Work Item 6) | 5 | 5 | 0 | 0 | **PASS** |
-| `tests/test_verification.py` (Work Items 7 & 8) | 6 | 6 | 0 | 0 | **PASS** |
-| `tests/test_observability.py` (Work Items 1, 2, 9) | 5 | 5 | 0 | 0 | **PASS** |
-| `tests/test_cancellation_shutdown.py` (Work Items 3 & 5) | 3 | 3 | 0 | 0 | **PASS** |
-| `tests/test_diagnostics.py` (Work Item 10) | 4 | 4 | 0 | 0 | **PASS** |
-| **Total Dedicated Phase 8 Tests** | **32** | **32** | **0** | **0** | **PASS** |
-| **Full Repository Regression Suite** | **555** | **554** | **0** | **1** | **PASS** |
+| `tests/test_retries.py` (Work Item 4, Retry-After cap, Backoff cancel) | 11 | 11 | 0 | 0 | **PASS** |
+| `tests/test_loop_detector.py` (Work Item 6, Canonical hashing) | 5 | 5 | 0 | 0 | **PASS** |
+| `tests/test_verification.py` (Work Items 7 & 8, F8-01, F8-02, F8-04) | 11 | 11 | 0 | 0 | **PASS** |
+| `tests/test_observability.py` (Work Items 1, 2, 9, F8-03, Pagination) | 8 | 8 | 0 | 0 | **PASS** |
+| `tests/test_cancellation_shutdown.py` (Work Items 3 & 5, Graceful shutdown) | 3 | 3 | 0 | 0 | **PASS** |
+| `tests/test_diagnostics.py` (Work Item 10, Secret masking) | 4 | 4 | 0 | 0 | **PASS** |
+| **Total Dedicated Phase 8 Tests** | **40** | **40** | **0** | **0** | **PASS** |
+| **Full Repository Regression Suite** | **563** | **562** | **0** | **1** | **PASS** |
 | **Frontend Test Suite (Vitest)** | **59** | **59** | **0** | **0** | **PASS** |
 | **Frontend Production Build (`tsc -b && vite build`)** | **1** | **1** | **0** | **0** | **PASS** |
 
@@ -78,7 +81,7 @@ flowchart TD
 ## 4. Work Completed vs docs/phases.md Acceptance Criteria
 
 1. **Transient model failures retry only within the configured budget:**  
-   *Verified.* `test_execute_with_retry_exhaustion` proves retry halts at max budget and raises `ModelRetryExhaustedError`.
+   *Verified.* `test_execute_with_retry_budget_exhaustion` proves retry halts at max budget and raises the underlying error.
 2. **Permanent errors do not loop indefinitely:**  
    *Verified.* HTTP 400, 401, 403, and 413 fail immediately without wasting retry attempts.
 3. **Cancellation stops further actions:**  
@@ -86,9 +89,9 @@ flowchart TD
 4. **Logs correlate a task with its tool calls:**  
    *Verified.* Correlation ID context variable binds to `tasks`, `tool_executions`, `model_calls`, `verification_records`, and `runtime_events`.
 5. **Secret redaction and output limits are tested:**  
-   *Verified.* API keys, passwords, and tokens are scrubbed; payloads and command outputs exceeding 64KB are middle-truncated.
+   *Verified.* API keys, passwords, AWS keys, JWTs, and private keys are scrubbed; payloads and command outputs exceeding 64KB are middle-truncated.
 6. **The runtime does not report tests as passed unless an actual test command returned success:**  
-   *Verified.* Only exit code 0 from `VerificationRunner` can set `VerificationStatus.PASSED`.
+   *Verified.* Only exit code 0 from a trusted `VerificationRunner` command can set `VerificationStatus.PASSED`.
 7. **Completion and verification statuses remain distinct:**  
    *Verified.* Task status tracks reasoning lifecycle; verification status tracks empirical test records.
 

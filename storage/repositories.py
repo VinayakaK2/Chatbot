@@ -1006,15 +1006,18 @@ class VerificationRepository:
             conn.execute(
                 """
                 INSERT INTO verification_records (
-                    id, task_id, verification_type, command, exit_code,
-                    result, output_excerpt, duration_ms, correlation_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    id, task_id, verification_type, command, origin, profile_name, authorized_by,
+                    exit_code, result, output_excerpt, duration_ms, correlation_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     record.id,
                     record.task_id,
                     record.verification_type.value,
                     clean_command,
+                    record.origin,
+                    record.profile_name,
+                    record.authorized_by,
                     record.exit_code,
                     record.result.value,
                     clean_excerpt,
@@ -1035,6 +1038,9 @@ class VerificationRepository:
         output_excerpt: Optional[str] = None,
         duration_ms: Optional[float] = None,
         correlation_id: Optional[str] = None,
+        origin: str = "configured_profile",
+        profile_name: Optional[str] = None,
+        authorized_by: Optional[str] = None,
     ) -> VerificationRecord:
         """Factory helper creating and persisting an authoritative verification record."""
         rec = VerificationRecord(
@@ -1042,6 +1048,9 @@ class VerificationRepository:
             task_id=task_id,
             verification_type=verification_type,
             command=command,
+            origin=origin,
+            profile_name=profile_name,
+            authorized_by=authorized_by,
             exit_code=exit_code,
             result=result,
             output_excerpt=output_excerpt,
@@ -1150,23 +1159,23 @@ class RuntimeEventRepository:
         )
         return self.append_event(rec)
 
-    def list_for_task(self, task_id: str) -> List[PersistedEventRecord]:
-        """List all runtime events for a specific task in chronological order."""
+    def list_for_task(self, task_id: str, limit: int = 500, offset: int = 0) -> List[PersistedEventRecord]:
+        """List runtime events for a specific task in chronological order with pagination."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM runtime_events WHERE task_id = ? ORDER BY created_at ASC;",
-            (task_id,),
+            "SELECT * FROM runtime_events WHERE task_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?;",
+            (task_id, max(1, limit), max(0, offset)),
         )
         return [PersistedEventRecord(**_row_to_dict(row)) for row in cursor.fetchall()]
 
-    def list_for_session(self, session_id: str) -> List[PersistedEventRecord]:
-        """List all runtime events for a specific session in chronological order."""
+    def list_for_session(self, session_id: str, limit: int = 500, offset: int = 0) -> List[PersistedEventRecord]:
+        """List runtime events for a specific session in chronological order with pagination."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM runtime_events WHERE session_id = ? ORDER BY created_at ASC;",
-            (session_id,),
+            "SELECT * FROM runtime_events WHERE session_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?;",
+            (session_id, max(1, limit), max(0, offset)),
         )
         return [PersistedEventRecord(**_row_to_dict(row)) for row in cursor.fetchall()]
 

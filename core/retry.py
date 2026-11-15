@@ -119,6 +119,7 @@ class RetryPolicy:
         operation: Callable[[], Awaitable[T]],
         is_idempotent: bool = True,
         on_retry: Optional[Callable[[int, Exception, FailureCategory, float], None]] = None,
+        cancellation_token: Optional[asyncio.Event] = None,
     ) -> T:
         """Execute an asynchronous operation with retry logic.
 
@@ -126,15 +127,23 @@ class RetryPolicy:
             operation: Async callable taking no arguments and returning a value.
             is_idempotent: Whether repeated execution is safe and idempotent.
             on_retry: Optional callback invoked before sleeping on retry (attempt, error, category, delay).
+            cancellation_token: Optional cancellation event that cancels waiting backoff immediately.
 
         Raises:
             Exception: The underlying exception if attempts are exhausted, error is non-transient, or call is non-idempotent.
+            asyncio.CancelledError: If cancellation is signaled during backoff.
         """
         attempt = 1
         while True:
+            if cancellation_token and cancellation_token.is_set():
+                raise asyncio.CancelledError("Operation cancelled before execution attempt.")
+
             try:
                 return await operation()
             except Exception as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+
                 category = classify_error(exc)
                 logger.debug(
                     "Operation failed on attempt %d: [%s] %s",
@@ -172,13 +181,14 @@ class RetryPolicy:
                     )
                     raise
 
-                # Extract retry-after header if available
+                # Extract retry-after header if available and clamp to 60s
                 retry_after: Optional[float] = None
                 if hasattr(exc, "response") and hasattr(getattr(exc, "response"), "headers"):
                     h = getattr(getattr(exc, "response"), "headers")
                     if "retry-after" in h:
                         try:
-                            retry_after = float(h["retry-after"])
+                            parsed_after = float(h["retry-after"])
+                            retry_after = min(parsed_after, 60.0)
                         except (ValueError, TypeError):
                             pass
 
@@ -194,7 +204,18 @@ class RetryPolicy:
                     delay,
                     str(exc),
                 )
-                await asyncio.sleep(delay)
+
+                if cancellation_token:
+                    if cancellation_token.is_set():
+                        raise asyncio.CancelledError("Operation cancelled before backoff sleep.")
+                    try:
+                        await asyncio.wait_for(cancellation_token.wait(), timeout=delay)
+                        raise asyncio.CancelledError("Operation cancelled during backoff sleep.")
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(delay)
+
                 attempt += 1
 
     def execute_sync_with_retry(

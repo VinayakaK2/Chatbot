@@ -871,25 +871,27 @@ Make failures understandable, bounded, and recoverable, and ensure completion cl
 
 ## Implementation & Audit Status (2026-11-15)
 
-- **Status:** Complete & Verified — Awaiting Operator Command to Formally Freeze.
+- **Status:** Complete & Formally Verified — Awaiting Operator Command to Freeze.
+- **Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 initial) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree
 - **Implemented Components:**
-  - `core/observability.py`: Ambient correlation ID contextvars, structured dot-delimited lifecycle events (`EventType`), payload middle truncation (64KB cap), thread-safe `StructuredEventEmitter`.
-  - `core/retry.py`: `FailureCategory` taxonomy, transient vs permanent classification, jittered exponential backoff, `Retry-After` header extraction, fail-closed non-idempotent mutation protection.
+  - `core/observability.py`: Ambient correlation ID contextvars, strict correlation validation (`validate_correlation_id`), structured lifecycle events (`EventType`), payload middle truncation (64KB cap), thread-safe `StructuredEventEmitter`.
+  - `core/retry.py`: `FailureCategory` taxonomy, transient vs permanent classification, jittered exponential backoff, `Retry-After` header extraction clamped to 60.0s max, backoff cancellation, fail-closed non-idempotent mutation protection.
   - `core/loop_detector.py`: Canonical sorted-key SHA-256 argument hashing, sliding history window, consecutive identical failure detection (threshold=3), oscillating ping-pong pattern detection (`A -> B -> A -> B`, threshold=2).
-  - `core/verification.py`: `VerificationRunner` subprocess execution with cross-platform tree kill (`taskkill /F /T` on Windows, process group on POSIX), exit code capture, 64KB bounded output middle truncation, SQLite persistence.
+  - `core/verification.py`: `VerificationRunner` subprocess execution with trusted command boundary (`DEFAULT_VERIFICATION_PROFILES`, command validation, environment allowlist `_build_safe_env`), capture-time incremental streaming memory bound (`BoundedStreamCapture` <= 64KB RAM), cross-platform process-tree termination (`taskkill /F /T` on Windows, process group on POSIX), exit code capture, SQLite persistence.
   - `core/diagnostics.py`: `mask_secret` safe credential display (`sk-***...***5de (len=34)`), shallow model connectivity probe, SQLite database health check (PRAGMA integrity_check, WAL mode, migration versions), CLI entry point `chatbot-diagnostics`.
-  - `storage/migrations.py`: Migration 003 (`003_reliability_observability_verification`) creating `verification_records` and `runtime_events` tables with performance indexes and adding correlation/retry columns to `tasks`, `tool_executions`, and `model_calls`.
-  - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify`, `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
+  - `storage/migrations.py`: Migration 003 (`003_reliability_observability_verification`) creating `verification_records` and `runtime_events` tables with performance indexes and adding correlation, provenance, and retry columns to `tasks`, `tool_executions`, `verification_records`, and `model_calls`.
+  - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify` (with profile/provenance support), `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
+  - `tools/security.py`: Defense-in-depth secret sanitization covering AWS keys, JWTs, URLs with embedded passwords, private keys, and recursive object scrubbing (`redact_secrets_obj`).
 - **Verification Evidence:**
-  - 32 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
-  - 554/555 backend tests passed (1 skipped live GPU endpoint test) with zero regressions across Phases 0–7.
+  - 40 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).
+  - 562/563 backend tests passed (1 skipped live GPU endpoint test) with zero regressions across Phases 0–7.
   - 59/59 frontend vitest tests passed across 10 test files.
-  - Frontend production build (`tsc -b && vite build`) passed cleanly in 518ms.
+  - Frontend production build (`tsc -b && vite build`) passed cleanly.
 - **Dossier & Documentation:**
   - `docs/reports/phase-8/phase-8-design.md`: Architecture design, sequence diagrams, and schema contracts.
   - `docs/reports/phase-8/phase-8-implementation-report.md`: Technical breakdown of work items, components, migrations, and APIs.
-  - `docs/reports/phase-8/phase-8-adversarial-report.md`: Adversarial testing against 10 threat scenarios.
-  - `docs/reports/phase-8/phase-8-independent-audit.md`: Formal forensic audit report against `AGENTS.md` and `2604.14228v3.pdf`.
+  - `docs/reports/phase-8/phase-8-adversarial-report.md`: Adversarial testing against 14 threat scenarios (including F8-01 trust boundary, F8-02 streaming bounds, F8-03 secret formats, F8-04 process tree termination).
+  - `docs/reports/phase-8/phase-8-independent-audit.md`: Formal forensic audit report against `AGENTS.md` and `2604.14228v3.pdf` (§12–13.1 observability-evaluation gap).
   - `docs/reports/phase-8/phase-8-final-report.md`: Executive acceptance summary and freeze readiness.
 - **Integrity Boundary:** Phase 8 implementation is complete and verified. Awaiting explicit operator instruction before formal freeze. Phase 9 has not been started.
 

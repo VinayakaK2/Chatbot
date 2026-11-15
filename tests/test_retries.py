@@ -175,3 +175,57 @@ async def test_permanent_error_terminates_immediately_without_retry() -> None:
         await policy.execute_with_retry(unauthorized_call, is_idempotent=True)
 
     assert attempts == 1, "Permanent error must NOT be retried"
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_clamped_to_sixty_seconds() -> None:
+    """Verify that an upstream Retry-After header with excessive delay is clamped to 60.0s max."""
+    policy = RetryPolicy(max_retries=1, base_delay=0.01, max_delay=120.0, jitter=False)
+    captured_delay = None
+    token = asyncio.Event()
+
+    def on_retry(att, err, cat, delay):
+        nonlocal captured_delay
+        captured_delay = delay
+        token.set()  # Cancel immediately to avoid sleeping 60s during test
+
+    async def rate_limited_call():
+        raise DummyHTTPError(
+            "Rate limited",
+            status_code=429,
+            headers={"retry-after": "3600"},  # 1 hour
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        await policy.execute_with_retry(
+            rate_limited_call,
+            is_idempotent=True,
+            on_retry=on_retry,
+            cancellation_token=token,
+        )
+
+    assert captured_delay is not None
+    assert captured_delay == 60.0  # Clamped to 60.0s max
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_backoff_sleep() -> None:
+    """Verify that setting cancellation_token aborts backoff sleep immediately without waiting."""
+    policy = RetryPolicy(max_retries=3, base_delay=10.0, max_delay=30.0, jitter=False)
+    token = asyncio.Event()
+
+    async def failing_call():
+        raise ConnectionResetError("Transient network blip")
+
+    # Schedule cancellation after 0.05s (while backoff sleep is 10s)
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.05, token.set)
+
+    start_time = asyncio.get_running_loop().time()
+    with pytest.raises(asyncio.CancelledError, match="Operation cancelled during backoff sleep"):
+        await policy.execute_with_retry(failing_call, is_idempotent=True, cancellation_token=token)
+
+    elapsed = asyncio.get_running_loop().time() - start_time
+    # Must abort in under 1.0 second, not 10 seconds
+    assert elapsed < 1.0, f"Backoff did not abort promptly on cancellation, took {elapsed}s"
+

@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 
+from api.schemas.tasks import TaskCreateRequest
 from core.observability import (
     EventType,
     StructuredEventEmitter,
     get_correlation_id,
     correlation_context,
     bound_and_scrub_payload,
+    sanitize_correlation_id,
 )
 from storage.database import DatabaseManager
 from storage.migrations import MigrationRunner
@@ -21,6 +23,7 @@ from storage.repositories import (
     ToolExecutionRepository,
     ModelCallRepository,
 )
+from tools.security import redact_secrets, redact_secrets_obj
 
 
 @pytest.fixture
@@ -197,3 +200,103 @@ def test_correlation_id_persistence_across_tables(temp_db: DatabaseManager) -> N
     loaded_model = calls[0]
     assert loaded_model.correlation_id == test_cid
     assert loaded_model.request_id == "req-987"
+
+
+def test_correlation_id_validation_strict() -> None:
+    """Verify strict validation of correlation IDs against log injection, length, and malformed inputs."""
+    # 1. Valid IDs
+    valid_req = TaskCreateRequest(prompt="Run test", correlation_id="trace_abc-123.456")
+    assert valid_req.correlation_id == "trace_abc-123.456"
+
+    # None and empty strings default safely
+    empty_req = TaskCreateRequest(prompt="Run test", correlation_id="   ")
+    assert empty_req.correlation_id is None
+
+    # 2. Overlong ID rejected
+    with pytest.raises(ValueError, match="must not exceed 128 characters"):
+        TaskCreateRequest(prompt="Run test", correlation_id="a" * 129)
+
+    # 3. Control and newline characters rejected
+    for invalid in ["bad\nid", "bad\rid", "bad\x00id", "id; DROP TABLE", "id with space"]:
+        with pytest.raises(ValueError):
+            TaskCreateRequest(prompt="Run test", correlation_id=invalid)
+
+    # 4. Context sanitize fallback
+    safe = sanitize_correlation_id("bad\nid")
+    assert safe != "bad\nid"
+    assert len(safe) == 36  # Regenerated UUID4
+
+
+def test_secret_redaction_patterns_and_nested_structures() -> None:
+    """Verify F8-03: defense-in-depth sanitization of recognized keys, tokens, URLs, and nested structures."""
+    nested_data = {
+        "aws_key": "AKIAIOSFODNN7EXAMPLE",
+        "jwt_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        "db_url": "https://service_user:SuperSecretPass123@db.internal.corp:5432/main",
+        "nested_dict": {
+            "key_block": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Y...\n-----END RSA PRIVATE KEY-----",
+            "bearer": "Bearer sk-proj-1234567890abcdef1234567890abcdef",
+        },
+        "safe_list": ["ordinary_item", 12345, True],
+    }
+
+    scrubbed = redact_secrets_obj(nested_data)
+
+    # AWS Key redacted
+    assert "AKIAIOSFODNN7EXAMPLE" not in str(scrubbed)
+    assert "[REDACTED]" in scrubbed["aws_key"]
+
+    # JWT redacted
+    assert "eyJhbGciOi" not in str(scrubbed)
+    assert "[REDACTED]" in scrubbed["jwt_token"]
+
+    # URL password redacted
+    assert "SuperSecretPass123" not in scrubbed["db_url"]
+    assert "service_user:[REDACTED_PASSWORD]@db.internal.corp" in scrubbed["db_url"]
+
+    # Private key redacted
+    assert "MIIEowIBAAKCAQEA0Y" not in scrubbed["nested_dict"]["key_block"]
+    assert "[REDACTED]" in scrubbed["nested_dict"]["key_block"]
+
+    # Bearer redacted
+    assert "sk-proj-1234567890" not in scrubbed["nested_dict"]["bearer"]
+    assert "Bearer [REDACTED_TOKEN]" in scrubbed["nested_dict"]["bearer"]
+
+    # Safe primitives preserved
+    assert scrubbed["safe_list"] == ["ordinary_item", 12345, True]
+
+
+def test_event_repository_pagination(temp_db: DatabaseManager) -> None:
+    """Verify limit and offset pagination on RuntimeEventRepository."""
+    task_repo = TaskRepository(temp_db)
+    task = task_repo.create_task(prompt="Pagination test task")
+    task_id = task.id
+
+    event_repo = RuntimeEventRepository(temp_db)
+    emitter = StructuredEventEmitter(event_repo=event_repo)
+
+    # Emit 10 events
+    for i in range(10):
+        emitter.emit(
+            event_type=EventType.TOOL_DISPATCH_STARTED,
+            task_id=task_id,
+            correlation_id="corr-page-1",
+            payload={"index": i},
+        )
+
+    # Page 1: limit 3, offset 0
+    p1 = event_repo.list_for_task(task_id, limit=3, offset=0)
+    assert len(p1) == 3
+    assert '"index": 0' in p1[0].payload_json
+    assert '"index": 2' in p1[2].payload_json
+
+    # Page 2: limit 3, offset 3
+    p2 = event_repo.list_for_task(task_id, limit=3, offset=3)
+    assert len(p2) == 3
+    assert '"index": 3' in p2[0].payload_json
+    assert '"index": 5' in p2[2].payload_json
+
+    # Out of bounds offset
+    p_empty = event_repo.list_for_task(task_id, limit=3, offset=20)
+    assert len(p_empty) == 0
+

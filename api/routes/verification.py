@@ -16,7 +16,24 @@ logger = logging.getLogger("agent_runtime.api.verification")
 class VerificationTriggerRequest(BaseModel):
     """Payload to trigger an independent verification command execution."""
 
-    command: str = Field(..., min_length=1, max_length=2048, description="Verification command line string")
+    command: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="Explicit verification command line string (requires operator origin)",
+    )
+    profile_name: Optional[str] = Field(
+        default=None,
+        description="Pre-approved trusted verification profile (e.g. 'test', 'build', 'lint', 'typecheck')",
+    )
+    origin: Optional[str] = Field(
+        default="operator",
+        description="Provenance of verification check ('operator', 'configured_profile', 'system')",
+    )
+    authorized_by: Optional[str] = Field(
+        default=None,
+        description="Operator or service identifier authorizing the verification execution",
+    )
     verification_type: VerificationType = Field(
         default=VerificationType.TEST,
         description="Category of check ('test', 'build', 'lint', 'typecheck', 'custom')",
@@ -42,7 +59,10 @@ async def trigger_task_verification(
 ) -> VerificationRecord:
     """Execute an independent verification command (e.g., test or build) in a controlled subprocess.
 
-    Captures exit code, duration, and bounded stdout/stderr, and persists a verification record.
+    Enforces trust boundaries:
+    - Verifies either a pre-approved profile or operator-authorized command is provided.
+    - Rejects trivial fake pass commands (e.g. echo, true, exit 0).
+    - Captures exit code, duration, and stream-bounded output excerpt.
     """
     task = task_service.get_task(task_id)
     if not task:
@@ -51,16 +71,36 @@ async def trigger_task_verification(
             detail=f"Task with ID '{task_id}' not found.",
         )
 
+    if not payload.command and not payload.profile_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either 'command' or 'profile_name' must be specified for verification.",
+        )
+
+    from core.verification import VerificationOrigin
+    try:
+        req_origin = VerificationOrigin(payload.origin) if payload.origin else VerificationOrigin.OPERATOR
+    except ValueError:
+        req_origin = VerificationOrigin.OPERATOR
+
     try:
         record = await task_service.verification_runner.run_verification(
             task_id=task_id,
             command=payload.command,
+            profile_name=payload.profile_name,
+            origin=req_origin,
+            authorized_by=payload.authorized_by,
             verification_type=payload.verification_type,
             cwd=str(task_service.workspace_context.root_path),
             timeout_seconds=payload.timeout_seconds,
             correlation_id=task.correlation_id,
         )
         return record
+    except ValueError as val_err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Verification validation rejected: {str(val_err)}",
+        ) from val_err
     except Exception as exc:
         logger.error("Error executing verification for task %s: %s", task_id, str(exc))
         raise HTTPException(

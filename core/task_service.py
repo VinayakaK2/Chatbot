@@ -939,7 +939,7 @@ class TaskService:
 
     def graceful_shutdown(self, timeout_seconds: float = 5.0) -> None:
         """Gracefully cancel all active in-flight tasks and flush state."""
-        logger.info("Initiating graceful shutdown of TaskService...")
+        logger.info("Initiating graceful shutdown of TaskService (deadline=%.1fs)...", timeout_seconds)
         with self._registry_lock:
             active_ids = [
                 tid for tid, task in self._tasks.items()
@@ -948,9 +948,17 @@ class TaskService:
 
         for tid in active_ids:
             try:
-                self.cancel_task(tid)
+                self.cancel_task(tid, reason="Server shutting down")
             except Exception as e:
                 logger.debug("Error cancelling task %s during shutdown: %s", tid, str(e))
+                try:
+                    self.task_repo.transition_state(
+                        tid,
+                        target_status=TaskStatus.CANCELLED,
+                        error="Server shutdown force cancellation",
+                    )
+                except Exception:
+                    pass
 
         logger.info("Graceful shutdown complete: cancelled %d active tasks.", len(active_ids))
 
