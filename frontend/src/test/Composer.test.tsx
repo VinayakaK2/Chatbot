@@ -88,4 +88,22 @@ describe('Composer Component', () => {
     expect(callArgs[1][0].name).toBe('math.py')
     expect(callArgs[1][0].content).toContain('def add(a, b):')
   })
+
+  it('renders model options with only model names and no extra description text', () => {
+    render(<Composer onSendMessage={vi.fn()} />)
+
+    const modelTrigger = screen.getByText('Gemini 3.8 Flash')
+    expect(modelTrigger).toBeDefined()
+
+    fireEvent.click(modelTrigger)
+
+    expect(screen.getByText('Qwen 2.5 Coder 14B')).toBeDefined()
+    expect(screen.getByText('GPT-4o')).toBeDefined()
+    expect(screen.getByText('Claude 3.5 Sonnet')).toBeDefined()
+
+    // Ensure long descriptions are removed as requested
+    expect(screen.queryByText(/Fast multimodal vision/i)).toBeNull()
+    expect(screen.queryByText(/Deep reasoning multimodal/i)).toBeNull()
+    expect(screen.queryByText(/Local \/ Colab vLLM/i)).toBeNull()
+  })
 })

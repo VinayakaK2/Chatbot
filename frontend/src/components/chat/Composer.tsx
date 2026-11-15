@@ -32,11 +32,11 @@ export interface ComposerProps {
 }
 
 const AVAILABLE_MODELS = [
-  { id: 'antigravity/gemini-3.8-flash', label: 'Gemini 3.8 Flash (Multimodal)', description: 'Fast multimodal vision & coding model (Configured)' },
-  { id: 'antigravity/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High Reasoning)', description: 'Deep reasoning multimodal model' },
-  { id: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ', label: 'Qwen 2.5 Coder 14B', description: 'Local / Colab vLLM Backend' },
-  { id: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI multimodal model' },
-  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: 'Anthropic multimodal model' },
+  { id: 'antigravity/gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+  { id: 'antigravity/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High)' },
+  { id: 'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ', label: 'Qwen 2.5 Coder 14B' },
+  { id: 'gpt-4o', label: 'GPT-4o' },
+  { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
 ]
 
 const REASONING_LEVELS = [
@@ -160,13 +160,12 @@ export const Composer: React.FC<ComposerProps> = ({
 
   const currentModelObj = AVAILABLE_MODELS.find((m) => m.id === activeModel)
   const displayModelName = currentModelObj
-    ? currentModelObj.label.split(' (')[0]
+    ? currentModelObj.label
     : activeModel.split('/').pop() || activeModel
 
   const modelDropdownItems = AVAILABLE_MODELS.map((m) => ({
     id: m.id,
     label: m.label,
-    description: m.description,
     onClick: () => {
       setActiveModel(m.id)
       if (onSelectModel) onSelectModel(m.id)
