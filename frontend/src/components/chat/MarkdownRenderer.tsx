@@ -6,6 +6,7 @@
 
 import React from 'react'
 import { CodeBlock } from './CodeBlock'
+import { IconSparkles } from '../common/Icons'
 
 export interface MarkdownRendererProps {
   content: string
@@ -148,14 +149,14 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     return isStreaming ? <span className="streaming-cursor" aria-hidden="true" /> : null
   }
 
-  // Parse reasoning tags <think>...</think> only if explicitly emitted by reasoning models
+  // Parse reasoning tags (<think>, <thought>, <thinking>, <reasoning>) emitted by models
   let thoughtText: string | null = null
   let textToParse = content
 
-  const thinkMatch = content.match(/<think>([\s\S]*?)(?:<\/think>|$)/i)
+  const thinkMatch = content.match(/<(?:think|thought|thinking|reasoning)>([\s\S]*?)(?:<\/(?:think|thought|thinking|reasoning)>|$)/i)
   if (thinkMatch) {
     thoughtText = thinkMatch[1].trim()
-    textToParse = content.replace(/<think>[\s\S]*?(?:<\/think>|$)/i, '').trim()
+    textToParse = content.replace(/<(?:think|thought|thinking|reasoning)>[\s\S]*?(?:<\/(?:think|thought|thinking|reasoning)>|$)/i, '').trim()
   }
 
   const lines = textToParse ? textToParse.replace(/\r\n/g, '\n').split('\n') : []
@@ -425,7 +426,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       {thoughtText && (
         <details className="thought-disclosure">
           <summary className="thought-summary">
-            <span>Thought</span>
+            <IconSparkles size={13} className="thought-icon" />
+            <span>Thought Process</span>
           </summary>
           <div className="thought-body">{thoughtText}</div>
         </details>

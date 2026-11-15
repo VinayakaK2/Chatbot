@@ -141,6 +141,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         <ExecutionActivity
           status={message.status}
           model={message.model}
+          durationSeconds={message.duration_seconds}
           toolActivities={message.tool_activities}
           verification={message.verification}
           onInspectArtifact={onInspectArtifact}

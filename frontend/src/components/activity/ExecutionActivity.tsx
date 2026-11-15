@@ -17,6 +17,7 @@ import { IconChevronDown, IconChevronRight } from '../common/Icons'
 export interface ExecutionActivityProps {
   status?: 'sending' | 'pending' | 'executing' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   model?: string
+  durationSeconds?: number
   toolActivities?: ToolActivity[]
   verification?: VerificationRecord
   onInspectArtifact?: (activity: ToolActivity) => void
@@ -69,12 +70,13 @@ function getToolSummaryLabel(activities: ToolActivity[]): string {
 
 export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
   status = 'completed',
+  durationSeconds,
   toolActivities = [],
   verification,
   onInspectArtifact,
 }) => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
-  // Level 1: "Worked for Xm" accordion state
+  // Level 1: "Worked for Xm" / "Thought for Xs" accordion state
   const [isTopExpanded, setIsTopExpanded] = useState(false)
   // Level 2: "Explored files, ran commands, edited files" accordion state
   const [isSummaryExpanded, setIsSummaryExpanded] = useState(false)
@@ -94,15 +96,21 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
     return () => clearInterval(interval)
   }, [isRunning])
 
-  // In-progress state: Minimal "Working" indicator
+  // In-progress state: Distinguishes "Thinking" (reasoning / formulating) from "Working" (executing tools)
   if (isRunning) {
     const hasTools = toolActivities.length > 0
+    const activeLabel = hasTools
+      ? elapsedSeconds === 0
+        ? 'Working'
+        : `Working (${elapsedSeconds}s)`
+      : elapsedSeconds === 0
+      ? 'Thinking'
+      : `Thinking (${elapsedSeconds}s)`
+
     return (
       <div className="execution-activity-container antigravity-activity-container">
         <div className="activity-working-row" role="status" aria-live="polite">
-          <span className="activity-working-label">
-            {elapsedSeconds === 0 ? 'Working' : `Working (${elapsedSeconds}s)`}
-          </span>
+          <span className="activity-working-label">{activeLabel}</span>
           <span className="activity-working-dots" aria-hidden="true">
             <span className="working-dot" />
             <span className="working-dot" />
@@ -125,21 +133,38 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
     )
   }
 
-  // Terminal state: 3-Level Disclosure Tree
+  // Terminal state: 3-Level Disclosure Tree with static duration preservation
   const hasTools = toolActivities.length > 0
   const hasVerification = !!verification
 
-  if (hasTools || hasVerification) {
-    const totalToolSec = Math.round(
-      toolActivities.reduce((acc, a) => acc + (a.duration_ms || 0), 0) / 1000
-    )
-    const effectiveSec = elapsedSeconds > 0 ? elapsedSeconds : Math.max(1, totalToolSec)
+  const totalToolSec = Math.round(
+    toolActivities.reduce((acc, a) => acc + (a.duration_ms || 0), 0) / 1000
+  )
+  // Prioritize persisted durationSeconds so web page refresh never resets duration to raw tool seconds
+  const effectiveSec =
+    typeof durationSeconds === 'number' && durationSeconds > 0
+      ? Math.round(durationSeconds)
+      : elapsedSeconds > 0
+      ? elapsedSeconds
+      : Math.max(1, totalToolSec)
+
+  const showActivity =
+    hasTools ||
+    hasVerification ||
+    (effectiveSec > 0 && (status === 'completed' || status === 'failed'))
+
+  if (showActivity) {
     const summaryLabel = getToolSummaryLabel(toolActivities)
+    const disclosureTitle = hasTools
+      ? `Worked for ${formatDuration(effectiveSec)}`
+      : hasVerification
+      ? `Verified for ${formatDuration(effectiveSec)}`
+      : `Thought for ${formatDuration(effectiveSec)}`
 
     return (
       <div className="execution-activity-container antigravity-activity-container">
         <div className="antigravity-disclosure-tree">
-          {/* Level 0: Top disclosure row — "Worked for 8m >" or "Worked for 8m ⌵" */}
+          {/* Level 0: Top disclosure row — "Worked for 8m >" or "Thought for 15s >" */}
           <button
             type="button"
             className="antigravity-disclosure-row level-0"
@@ -147,11 +172,7 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
             aria-expanded={isTopExpanded}
             title={isTopExpanded ? 'Collapse activity' : 'Expand activity'}
           >
-            <span className="disclosure-text">
-              {hasTools
-                ? `Worked for ${formatDuration(effectiveSec)}`
-                : `Verified for ${formatDuration(effectiveSec)}`}
-            </span>
+            <span className="disclosure-text">{disclosureTitle}</span>
             {isTopExpanded ? (
               <IconChevronDown size={13} className="disclosure-chevron" />
             ) : (
@@ -159,10 +180,10 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
             )}
           </button>
 
-          {/* Level 1: Underneath "Worked for 8m ⌵" */}
+          {/* Level 1: Underneath disclosure row */}
           {isTopExpanded && (
             <div className="antigravity-tree-children level-1-children">
-              {hasTools && (
+              {hasTools ? (
                 <>
                   {/* Level 1 Summary button: "Explored files, ran commands, edited files >" / "⌵" */}
                   <button
@@ -193,6 +214,10 @@ export const ExecutionActivity: React.FC<ExecutionActivityProps> = ({
                     </div>
                   )}
                 </>
+              ) : (
+                <div className="antigravity-disclosure-row level-1 read-only">
+                  <span className="disclosure-text">Reasoned and synthesized response</span>
+                </div>
               )}
 
               {/* Verification details if attached */}

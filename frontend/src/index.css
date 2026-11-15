@@ -2321,38 +2321,63 @@
   transform: rotate(90deg);
 }
 
-/* Explicit reasoning / thinking disclosure only when <think> tag is emitted by model */
+/* Explicit reasoning / thinking disclosure when thinking tags are emitted by model */
 .thought-disclosure {
   margin-bottom: 14px;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  background-color: var(--bg-surface, #121216);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm, 6px);
   padding: 8px 12px;
+  transition: border-color var(--transition-fast, 150ms ease);
+}
+
+.thought-disclosure[open] {
+  border-color: var(--border-default, rgba(255, 255, 255, 0.14));
 }
 
 .thought-summary {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--text-muted, #8e8e93);
   cursor: pointer;
   user-select: none;
   display: flex;
   align-items: center;
   gap: 6px;
+  transition: color var(--transition-fast, 150ms ease);
+}
+
+.thought-icon {
+  color: var(--text-muted, #8e8e93);
+  flex-shrink: 0;
+  transition: color var(--transition-fast, 150ms ease);
 }
 
 .thought-summary:hover {
-  color: var(--text-secondary);
+  color: var(--text-primary, #ffffff);
+}
+
+.thought-summary:hover .thought-icon {
+  color: var(--accent-primary, #ffffff);
 }
 
 .thought-body {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
   font-size: 13px;
   line-height: 1.6;
-  color: var(--text-muted);
+  color: var(--text-secondary, #b3b3b3);
   white-space: pre-wrap;
+}
+
+.antigravity-disclosure-row.read-only {
+  cursor: default !important;
+  color: var(--text-muted, #71717a) !important;
+}
+
+.antigravity-disclosure-row.read-only:hover {
+  color: var(--text-muted, #71717a) !important;
 }
 
 .activity-expanded-content {
