@@ -3,7 +3,7 @@
 **Date:** 2026-11-15  
 **Auditor:** Phase 8 Remediation & Verification Engineer  
 **Status:** All Adversarial Vectors Formally Passed  
-**Git Lineage:** `3a9a378` → `7839890` → `9590efd` → `b76268a` → `45f3aeb` → current working tree  
+**Git Lineage:** `9590efd` (Formal Phase 7 freeze commit) → `b76268a` (Phase 8 initial implementation) → `2b30a54` (Verification trust boundary & stream capture hardening) → `bf63fc6` (Test count & authorization reconciliation) → current working tree (enforce operator role auth & trusted executable paths)  
 
 ---
 
@@ -27,6 +27,7 @@ Phase 8 introduces active runtime controls defending against model deception, ru
 | **ADV-12** | Retry-After DOS | Upstream server returns `Retry-After: 3600` (1 hour) attempting to freeze runtime workers. | Header delay parsed and clamped to `MAX_RETRY_AFTER_CAP = 60.0s`. | **PASSED** (Clamped to 60.0s max). |
 | **ADV-13** | Backoff Sleep Freeze | Task is cancelled while worker is waiting in a 10s backoff sleep. | `cancellation_token` monitored during sleep; aborts immediately with `asyncio.CancelledError`. | **PASSED** (Aborts in < 0.1s without waiting for delay). |
 | **ADV-14** | Uncommitted DDL Rollback | SQLite multi-statement DDL fails halfway; partial tables remain in database. | `DatabaseManager.transaction()` issues `BEGIN;` ensuring transactional DDL rollback. | **PASSED** (Database rolled back completely; 0 partial tables). |
+| **ADV-15** | Unauthorized Custom Verification Command | Unauthenticated caller or authenticated non-operator attempts custom verification command. | Principal authentication & role matrix (`core/auth.py`): 401 on missing/invalid token, 403 on non-operator. | **PASSED** (Condition 1 & 2 enforced; Condition 3 records operator identity). |
 
 ---
 
@@ -69,8 +70,22 @@ Phase 8 introduces active runtime controls defending against model deception, ru
 - **Characterization:** Redaction is verified as defense-in-depth sanitization of recognized patterns on recorded write paths.
 - **Result:** Defended. Zero recognized plaintext credentials stored in SQLite or emitted to logs.
 
+### ADV-15: Operator Role Authorization Matrix & Executable Resolution (Conditions 1–4)
+- **Test:** `test_api_verification_security_authorization_matrix` in `tests/test_verification.py`
+- **Simulation:**
+  - Case 1 (Condition 1 - Unauthenticated Caller): Client attempts custom command execution (`command="python -m pytest tests/test_diagnostics.py"`) with header `X-Operator-Authorization: true` but omitting authentication token.
+  - Case 2 (Condition 2 - Authenticated Non-Operator): Client provides valid viewer token `viewer-token-9912` (`PrincipalRole.VIEWER`) attempting custom verification command.
+  - Case 3 (Condition 3 - Authenticated Operator): Client provides valid operator token `op-secret-token-3891` (`PrincipalRole.OPERATOR`) attempting custom verification command with caller-supplied body `{"origin": "system", "authorized_by": "root"}`.
+  - Case 4 (Condition 4 - Configured Profile Resolution): Client triggers profile `profile_name="test_quick"` without auth headers.
+- **Observation:**
+  - Case 1: Fast return of `HTTP 401 Unauthorized` with detail `"Authentication required to execute custom verification commands"`. Supply of `X-Operator-Authorization: true` alone is safely rejected.
+  - Case 2: Fast return of `HTTP 403 Forbidden` with detail `"Forbidden: operator role required to execute custom verification commands (principal 'guest_viewer' has role 'viewer')"`.
+  - Case 3: Returns `HTTP 201 Created`. In SQLite `verification_records`, the runtime binds `origin = "operator"` and `authorized_by = "operator_admin"`, ignoring spoofed payload fields.
+  - Case 4: Returns `HTTP 201 Created`. Resolves via trusted `get_default_verification_profiles()` anchored to `sys.executable`, binding `origin = "configured_profile"` and `authorized_by = "system_policy"`.
+- **Result:** Defended. All 4 authorization and resolution conditions strictly verified.
+
 ---
 
 ## 3. Adversarial Acceptance Sign-off
 
-All 14 threat scenarios have been proven mitigated by deterministic runtime mechanisms and covered by automated regression tests in the test suite.
+All 15 threat scenarios have been proven mitigated by deterministic runtime mechanisms and covered by automated regression tests in the test suite.

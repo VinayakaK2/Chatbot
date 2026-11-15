@@ -2,9 +2,10 @@
 
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from core.auth import Principal, PrincipalRole, authenticate_principal
 from core.diagnostics import run_diagnostics
 from core.task_service import TaskService, get_task_service
 from storage.models import VerificationRecord, VerificationType
@@ -55,16 +56,17 @@ class VerificationTriggerRequest(BaseModel):
 async def trigger_task_verification(
     task_id: str,
     payload: VerificationTriggerRequest,
-    x_operator_authorization: Optional[str] = Header(None, alias="X-Operator-Authorization"),
-    x_operator_identity: Optional[str] = Header(None, alias="X-Operator-Identity"),
+    principal: Optional[Principal] = Depends(authenticate_principal),
     task_service: TaskService = Depends(get_task_service),
 ) -> VerificationRecord:
     """Execute an independent verification command (e.g., test or build) in a controlled subprocess.
 
     Enforces trust boundaries:
-    - Pre-approved profiles resolve from configuration and receive CONFIGURED_PROFILE origin.
-    - Custom commands require explicit operator authorization via 'X-Operator-Authorization' header.
-    - Untrusted callers cannot manufacture operator provenance.
+    - Pre-approved profiles resolve strictly from trusted configuration and receive CONFIGURED_PROFILE origin.
+    - Custom verification commands require an authenticated principal with OPERATOR role.
+    - Unauthenticated callers receive HTTP 401 Unauthorized for custom commands.
+    - Authenticated non-operators receive HTTP 403 Forbidden for custom commands.
+    - Provenance is strictly bound to the authenticated principal identity, not caller-supplied fields.
     - Rejects trivial fake pass commands (e.g. echo, true, exit 0).
     - Captures exit code, duration, and stream-bounded output excerpt.
     """
@@ -84,32 +86,31 @@ async def trigger_task_verification(
     from core.verification import VerificationOrigin
 
     # Authorization and Provenance Policy:
-    # 1. Configured profiles are authenticated against trusted configuration
+    # 1. Configured profiles are pre-approved and resolve from trusted runtime environment
     if payload.profile_name:
         effective_origin = VerificationOrigin.CONFIGURED_PROFILE
         effective_authorized_by = "system_policy"
         effective_command = None
         effective_profile = payload.profile_name
     else:
-        # 2. Custom commands strictly require explicit operator authorization header
-        is_operator_authorized = (
-            x_operator_authorization is not None
-            and x_operator_authorization.strip().lower() in ("true", "1", "yes")
-        )
-        if not is_operator_authorized:
+        # 2. Custom commands strictly require an authenticated operator principal
+        if principal is None:
+            # Condition 1: Unauthenticated caller cannot execute custom verification command
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to execute custom verification commands. Untrusted callers must use a pre-approved profile_name.",
+            )
+
+        if principal.role != PrincipalRole.OPERATOR:
+            # Condition 2: Authenticated non-operator cannot execute custom verification command
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "Custom verification commands require explicit operator authorization via "
-                    "'X-Operator-Authorization' header. Untrusted callers must use a pre-approved profile_name."
-                ),
+                detail=f"Principal '{principal.identity}' with role '{principal.role.value}' is not authorized to execute custom verification commands (operator role required).",
             )
+
+        # Condition 3: Authenticated operator can execute, with provenance tied to the authenticated principal
         effective_origin = VerificationOrigin.OPERATOR
-        effective_authorized_by = (
-            x_operator_identity.strip()
-            if x_operator_identity and x_operator_identity.strip()
-            else (payload.authorized_by or "operator")
-        )
+        effective_authorized_by = principal.identity
         effective_command = payload.command
         effective_profile = None
 

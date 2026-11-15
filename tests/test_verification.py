@@ -173,7 +173,7 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     assert create_resp.status_code == 201
     task_id = create_resp.json()["task_id"]
 
-    # 2. Trigger verification check via API with explicit operator authorization header
+    # 2. Trigger verification check via API with authenticated operator credentials
     verify_resp = client.post(
         f"/api/tasks/{task_id}/verify",
         json={
@@ -181,7 +181,7 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
             "verification_type": "test",
             "timeout_seconds": 10.0,
         },
-        headers={"X-Operator-Authorization": "true", "X-Operator-Identity": "lead_operator"},
+        headers={"Authorization": "Bearer op-secret-token-3891"},
     )
     assert verify_resp.status_code == 201
     v_data = verify_resp.json()
@@ -189,7 +189,7 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     assert v_data["result"] == "passed"
     assert v_data["exit_code"] == 0
     assert v_data["origin"] == "operator"
-    assert v_data["authorized_by"] == "lead_operator"
+    assert v_data["authorized_by"] == "operator_admin"
 
     # 3. Query verifications list
     list_resp = client.get(f"/api/tasks/{task_id}/verifications")
@@ -205,19 +205,19 @@ def test_api_verification_routes(temp_db: DatabaseManager) -> None:
     assert task_resp.json()["verification_status"] == "passed"
 
 
-def test_api_verification_untrusted_caller_cannot_manufacture_operator_provenance(temp_db: DatabaseManager) -> None:
-    """Verify that an untrusted caller cannot execute custom commands or manufacture operator provenance."""
+def test_api_verification_security_authorization_matrix(temp_db: DatabaseManager) -> None:
+    """Verify security matrix: unauthenticated (401), non-operator (403), operator (201), profile (201)."""
     from core.task_service import set_task_service
     task_service = TaskService(database_manager=temp_db, auto_run_recovery=False)
     set_task_service(task_service)
     app = create_app()
     client = TestClient(app)
 
-    create_resp = client.post("/api/tasks", json={"prompt": "Task for authorization check"})
+    create_resp = client.post("/api/tasks", json={"prompt": "Task for security matrix check"})
     assert create_resp.status_code == 201
     task_id = create_resp.json()["task_id"]
 
-    # 1. Untrusted caller sends raw command WITHOUT operator authorization header -> 403 Forbidden
+    # Condition 1: Unauthenticated caller cannot execute custom verification command, even when supplying headers
     unauth_resp = client.post(
         f"/api/tasks/{task_id}/verify",
         json={
@@ -225,26 +225,62 @@ def test_api_verification_untrusted_caller_cannot_manufacture_operator_provenanc
             "origin": "operator",
             "authorized_by": "root_admin",
         },
+        headers={"X-Operator-Authorization": "true", "X-Operator-Identity": "fake_admin"},
     )
-    assert unauth_resp.status_code == 403
-    assert "Custom verification commands require explicit operator authorization" in unauth_resp.json()["detail"]
+    assert unauth_resp.status_code == 401
+    assert "Authentication required" in unauth_resp.json()["detail"]
 
-    # 2. Untrusted caller sends profile_name="test" while trying to inject origin="operator" and authorized_by="attacker"
-    # Provenance is strictly assigned to CONFIGURED_PROFILE and system_policy by the runtime
+    # Condition 2: Authenticated non-operator (role=VIEWER) cannot execute custom command
+    viewer_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={
+            "command": "python -c \"print('VIEWER_CUSTOM')\"",
+        },
+        headers={"Authorization": "Bearer viewer-token-9912"},
+    )
+    assert viewer_resp.status_code == 403
+    assert "operator role required" in viewer_resp.json()["detail"]
+
+    # Condition 3: Authenticated operator can execute, with provenance tied to the authenticated principal
+    op_resp = client.post(
+        f"/api/tasks/{task_id}/verify",
+        json={
+            "command": "python -c \"print('OPERATOR_AUTHORIZED')\"",
+            "origin": "spoofed_origin",
+            "authorized_by": "spoofed_authorizer",
+        },
+        headers={"Authorization": "Bearer op-secret-token-3891"},
+    )
+    assert op_resp.status_code == 201
+    op_data = op_resp.json()
+    assert op_data["origin"] == "operator"
+    # Provenance is strictly bound to the authenticated principal identity, not caller's spoofed fields
+    assert op_data["authorized_by"] == "operator_admin"
+    assert "OPERATOR_AUTHORIZED" in (op_data["output_excerpt"] or "")
+
+    # Condition 4: Configured profile resolves to trusted executable under intended environment
+    task_service.verification_runner.profiles["test_quick"] = f'"{sys.executable}" -c "print(\'QUICK_VERIFIED\')"'
     profile_resp = client.post(
         f"/api/tasks/{task_id}/verify",
         json={
-            "profile_name": "test",
+            "profile_name": "test_quick",
             "origin": "operator",
             "authorized_by": "attacker",
         },
     )
-    # Runner resolves configured profile; origin is overridden to CONFIGURED_PROFILE
-    assert profile_resp.status_code in (201, 500)  # In mock/test env without actual pytest command it executes profile
-    if profile_resp.status_code == 201:
-        data = profile_resp.json()
-        assert data["origin"] == "configured_profile"
-        assert data["authorized_by"] == "system_policy"
+    assert profile_resp.status_code == 201
+    prof_data = profile_resp.json()
+    assert prof_data["origin"] == "configured_profile"
+    assert prof_data["authorized_by"] == "system_policy"
+    # Command was resolved to sys.executable
+    assert sys.executable in prof_data["command"]
+    assert "QUICK_VERIFIED" in (prof_data["output_excerpt"] or "")
+
+    # Also verify DEFAULT_VERIFICATION_PROFILES anchors to sys.executable and ignores smoke tests
+    default_test_cmd = DEFAULT_VERIFICATION_PROFILES["test"]
+    assert sys.executable in default_test_cmd
+    assert "-m pytest" in default_test_cmd
+    assert "--ignore=tests/test_smoke_live.py" in default_test_cmd
 
 
 def test_verification_rejects_trivial_and_unsafe_commands() -> None:

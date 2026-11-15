@@ -3,7 +3,7 @@
 **Date:** 2026-11-15  
 **Status:** Implemented, Integrated, and Formally Verified  
 **Runtime:** Python 3.14 (AsyncIO, FastAPI, SQLite WAL) + React/Vite/TypeScript  
-**Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 baseline) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree  
+**Git Lineage:** `9590efd` (Formal Phase 7 freeze commit) → `b76268a` (Phase 8 initial implementation) → `2b30a54` (Verification trust boundary & stream capture hardening) → `bf63fc6` (Test count & authorization reconciliation) → current working tree (enforce operator role auth & trusted executable paths)  
 
 ---
 
@@ -78,14 +78,24 @@ All 10 work items have been fully implemented, verified across unit and integrat
   - Halts execution and emits `EventType.TOOL_LOOP_DETECTED` with actionable diagnostic reasons.
 
 ### Work Item 7: Trusted Independent Verification Records (F8-01, F8-02, F8-04)
-- **Module:** `core/verification.py`, `storage/models.py`, `storage/repositories.py`
+- **Module:** `core/auth.py`, `core/verification.py`, `api/routes/verification.py`, `storage/models.py`, `storage/repositories.py`
 - **Implementation:**
   - `VerificationRunner` executes test, build, lint, or typecheck commands in controlled subprocesses.
-  - **Trust Boundary & Provenance (F8-01):** Verification commands must originate from pre-approved configured profiles (`DEFAULT_VERIFICATION_PROFILES`) or explicit operator authorization. In the API layer (`POST /api/tasks/{task_id}/verify`), custom commands require the `X-Operator-Authorization: true` request header; unauthenticated requests without this header receive HTTP 403 Forbidden. Pre-approved profiles (`profile_name`) always set `origin = "configured_profile"` and `authorized_by = "system_policy"`. Untrusted callers cannot manufacture operator provenance.
+  - **Operator Role Authorization Boundary (Conditions 1–3):**
+    - `core/auth.py` introduces strongly typed principal identities: `PrincipalRole` (`OPERATOR`, `VIEWER`, `AGENT`) and `Principal(identity, role)`.
+    - FastAPI dependency `authenticate_principal` extracts tokens from `Authorization: Bearer <token>` or `X-API-Key: <token>`.
+    - **Condition 1 (Unauthenticated callers):** Requests with no authorization headers or invalid tokens receive `HTTP 401 Unauthorized`. Even if an attacker supplies `X-Operator-Authorization: true`, the absence of a valid operator token results in HTTP 401.
+    - **Condition 2 (Authenticated non-operators):** Authenticated callers holding viewer or agent tokens (e.g. `viewer-token-9912`) receive `HTTP 403 Forbidden` (`"operator role required to execute custom verification commands"`).
+    - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens (e.g. `op-secret-token-3891`, `dev-operator-token`) receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+  - **Trusted Profile Resolution (Condition 4):**
+    - `get_default_verification_profiles()` resolves profiles dynamically to trusted interpreter paths under the active virtual environment: `"test"` resolves to `f'"{sys.executable}" -m pytest --ignore=tests/test_smoke_live.py'`, preventing relative executable hijacking, PATH pollution, or cwd script shadowing.
+    - Profile runs automatically assign `origin = "configured_profile"` and `authorized_by = "system_policy"`.
   - **Self-Certification Prevention:** `validate_verification_command` rejects trivial pass commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`, `|`).
   - **Environment Hygiene:** Subprocesses run with clean minimal environment allowlist `_build_safe_env` (`PATH`, `SYSTEMROOT`, `TEMP`, `PYTHONPATH`, `VIRTUAL_ENV`).
-  - **Incremental Streaming Bounded Capture (F8-02):** `BoundedStreamCapture` consumes stdout/stderr in 4KB chunks into a 32KB head buffer and a 32KB circular deque tail buffer. Capture-time memory is strictly capped at `<= 64KB` regardless of stream size.
-  - **Process-Tree Termination (F8-04):** `_terminate_process_tree` issues `taskkill /F /T /PID` on Windows and process group `SIGKILL` on POSIX, terminating child and grandchild processes on timeout or cancellation.
+  - **Incremental Streaming Bounded Capture (Condition 5 & F8-02):** `BoundedStreamCapture` consumes stdout/stderr in 4KB chunks into a 32KB head buffer and a 32KB circular deque tail buffer. Capture-time memory is strictly capped at `<= 64KB` in RAM regardless of stream size (verified against 10MB streaming outputs).
+  - **Platform-Specific Process-Tree Termination (Condition 5 & F8-04):** `_terminate_process_tree` executes:
+    - **Windows:** `taskkill /F /T /PID <child_pid>` terminating the process and all descendant child and grandchild processes.
+    - **POSIX:** `os.killpg(os.getpgid(pid), signal.SIGKILL)` terminating the entire process group, with fallback to `proc.kill()`.
   - Persisted in dedicated `verification_records` SQLite table with foreign key linkage to `tasks.id`.
 
 ### Work Item 8: Decoupled Task vs Verification Status

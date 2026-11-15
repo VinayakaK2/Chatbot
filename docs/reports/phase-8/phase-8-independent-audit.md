@@ -2,7 +2,7 @@
 **Auditor:** Independent Technical Auditor & Project Orchestrator  
 **Date:** 2026-11-15  
 **Subject:** Phase 8 — Reliability, Observability, and Verification  
-**Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 initial) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree  
+**Git Lineage:** `9590efd` (Formal Phase 7 freeze commit) → `b76268a` (Phase 8 initial implementation) → `2b30a54` (Verification trust boundary & stream capture hardening) → `bf63fc6` (Test count & authorization reconciliation) → current working tree (enforce operator role auth & trusted executable paths)  
 **Audit Standard:** Strict Compliance with `AGENTS.md`, `sources/2604.14228v3.pdf`, and `docs/phases.md`  
 
 ---
@@ -62,27 +62,38 @@ Under this architecture:
 
 ## 4. Forensic Codebase Inspection
 
-### 4.1 Verification Trust Boundary & Command Provenance (F8-01)
-- **Finding:** In `core/verification.py` and `api/routes/verification.py`, verification commands are strictly guarded against unauthorized execution and self-certification.
+### 4.1 Verification Trust Boundary & Operator Authorization Matrix (F8-01, Conditions 1–4)
+- **Finding:** In `core/auth.py`, `core/verification.py`, and `api/routes/verification.py`, verification commands are strictly guarded against unauthorized execution and self-certification.
 - **Enforcement:**
-  - `POST /api/tasks/{task_id}/verify` strictly requires pre-approved `profile_name` (`test`, `build`, `lint`, `typecheck`, `test_unit`) or an authorized custom command.
-  - Custom command execution requires explicit operator authorization via the `X-Operator-Authorization: true` request header. Untrusted callers without this header receive HTTP 403 Forbidden.
-  - When a pre-approved profile is requested, the runtime deterministically assigns `origin = "configured_profile"` and `authorized_by = "system_policy"`, ignoring any caller-supplied origin or authorizer strings. Untrusted callers cannot manufacture operator provenance.
-  - `validate_verification_command` rejects trivial pass commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`, `|`).
-  - Subprocesses run with a sanitized environment allowlist `_build_safe_env`, withholding host secrets from child processes.
+  - `core/auth.py` implements role-based security: `PrincipalRole` (`OPERATOR`, `VIEWER`, `AGENT`) and `authenticate_principal` parsing `Authorization: Bearer <token>` and `X-API-Key: <token>`.
+  - **Condition 1 (Unauthenticated callers):** Requests with no authorization headers or invalid tokens receive `HTTP 401 Unauthorized`. Even if an attacker supplies `X-Operator-Authorization: true`, the absence of a valid operator token results in HTTP 401.
+  - **Condition 2 (Authenticated non-operators):** Authenticated callers holding viewer or agent tokens (e.g. `viewer-token-9912`) receive `HTTP 403 Forbidden` (`"operator role required to execute custom verification commands"`).
+  - **Condition 3 (Authenticated operators):** Authenticated callers holding operator tokens (e.g. `op-secret-token-3891`, `dev-operator-token`) receive `HTTP 201 Created`. The runtime deterministically binds provenance: `origin = "operator"` and `authorized_by = principal.identity`. Untrusted callers cannot forge or manufacture operator provenance.
+  - **Condition 4 (Trusted Profile Resolution):** `get_default_verification_profiles()` dynamically anchors Python test profiles to `sys.executable` (e.g. `f'"{sys.executable}" -m pytest --ignore=tests/test_smoke_live.py'`) and `npm` via `shutil.which("npm")`, guaranteeing execution strictly under the virtual environment interpreter and preventing ambient PATH or relative binary hijacking.
+  - **Self-Certification Prevention:** `validate_verification_command` rejects trivial pass commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`, `|`).
+  - **Environment Hygiene:** Subprocesses run with a sanitized environment allowlist `_build_safe_env`, withholding host secrets from child processes.
   - Verification records persist command provenance: `origin`, `profile_name`, and `authorized_by`.
 
-### 4.2 Incremental Streaming Memory Bounding (F8-02)
+### 4.2 Incremental Streaming Memory Bounding (F8-02, Condition 5)
 - **Finding:** Subprocess output is consumed incrementally via `BoundedStreamCapture` rather than buffering unbounded output in `proc.communicate()`.
-- **Enforcement:** `BoundedStreamCapture` reads stdout/stderr in 4KB chunks. The head buffer is capped at 32KB; remaining bytes are pushed through a sliding circular deque capped at 32KB. Total memory retained during streaming is bounded at `<= 64KB` even when processing 10MB+ streams.
+- **Enforcement:** `BoundedStreamCapture` reads stdout/stderr in 4KB chunks. The head buffer is capped at 32KB; remaining bytes are pushed through a sliding circular deque capped at 32KB. Total memory retained during streaming is strictly bounded at `<= 64KB` RAM even when processing 10MB+ streams.
 
 ### 4.3 Defense-in-Depth Secret Sanitization (F8-03)
 - **Finding:** In `tools/security.py`, regex patterns were expanded to cover AWS access keys (`AKIA...`), JWT tokens, URLs with embedded passwords, and RSA private keys.
 - **Enforcement:** `redact_secrets_obj` recursively scrubs nested dictionaries, lists, and exception payloads prior to persistence in SQLite (`runtime_events`, `verification_records`, `tool_executions`, `model_calls`, `tasks`) and SSE streaming queues. The documentation properly characterizes this as defense-in-depth sanitization of recognized patterns on recorded write paths rather than universal confidentiality.
 
-### 4.4 Multi-Level Process Tree Termination (F8-04)
-- **Finding:** In `core/verification.py`, `_terminate_process_tree` terminates subprocess trees using `taskkill /F /T /PID` on Windows and process group `SIGKILL` on POSIX.
+### 4.4 Multi-Level Process Tree Termination (F8-04, Condition 5)
+- **Finding:** In `core/verification.py`, `_terminate_process_tree` terminates subprocess trees using `taskkill /F /T /PID <child_pid>` on Windows and process group `os.killpg(os.getpgid(pid), signal.SIGKILL)` on POSIX.
 - **Enforcement:** Verified empirically in `test_verification_process_tree_termination`: a child script spawns a grandchild process running `sleep 60`. Upon verification timeout, both child and grandchild are terminated, confirmed by querying the OS via `tasklist`.
+
+### 4.5 Unambiguous Phase 7 Freeze Git Lineage (Condition 6)
+- **Finding:** The commit history unambiguously identifies `9590efd` as the formal Phase 7 freeze commit (`docs(phase-7): update frozen HEAD commit SHA`), which locked Phase 7 documentation following `11dd8b9` (formal operator freeze) and `7839890` (migration 002 causal lineage refinement).
+- **Lineage Verification:**
+  - `9590efd`: Formal Phase 7 freeze commit.
+  - `b76268a`: Commenced Phase 8 implementation (`feat(phase-8): implement reliability, observability, and verification suite`).
+  - `2b30a54`: Phase 8 hardening (`feat(phase-8): harden verification trust boundary, bounded stream capture, and secret sanitization`).
+  - `bf63fc6`: Phase 8 reconciliation (`docs(phase-8): reconcile test counts, skip policy, and verification authorization boundary`).
+  - Current working tree: Final security verification enforcing Conditions 1–6.
 
 ---
 

@@ -872,15 +872,24 @@ Make failures understandable, bounded, and recoverable, and ensure completion cl
 ## Implementation & Audit Status (2026-11-15)
 
 - **Status:** Complete & Formally Verified — Awaiting Operator Command to Freeze.
-- **Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 initial) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree
+- **Git Lineage:** `9590efd` (Formal Phase 7 freeze commit) → `b76268a` (Phase 8 implementation) → `2b30a54` (Verification trust boundary & stream capture hardening) → `bf63fc6` (Test count & authorization reconciliation) → current working tree (enforce operator role auth & trusted executable paths)
 - **Implemented Components:**
+  - `core/auth.py`: Lightweight API security layer defining `PrincipalRole` (`OPERATOR`, `VIEWER`, `AGENT`), `Principal(identity, role)`, and `authenticate_principal` dependency supporting `Authorization: Bearer <token>` and `X-API-Key: <token>`. Unauthenticated callers or invalid tokens yield `None`.
   - `core/observability.py`: Ambient correlation ID contextvars, strict correlation validation (`validate_correlation_id`), structured lifecycle events (`EventType`), payload middle truncation (64KB cap), thread-safe `StructuredEventEmitter`.
   - `core/retry.py`: `FailureCategory` taxonomy, transient vs permanent classification, jittered exponential backoff, `Retry-After` header extraction clamped to 60.0s max, backoff cancellation, fail-closed non-idempotent mutation protection.
   - `core/loop_detector.py`: Canonical sorted-key SHA-256 argument hashing, sliding history window, consecutive identical failure detection (threshold=3), oscillating ping-pong pattern detection (`A -> B -> A -> B`, threshold=2).
-  - `core/verification.py`: `VerificationRunner` subprocess execution with trusted command boundary (`DEFAULT_VERIFICATION_PROFILES`, command validation, environment allowlist `_build_safe_env`), capture-time incremental streaming memory bound (`BoundedStreamCapture` <= 64KB RAM), cross-platform process-tree termination (`taskkill /F /T` on Windows, process group on POSIX), exit code capture, SQLite persistence.
+  - `core/verification.py`: `VerificationRunner` subprocess execution with trusted command boundary:
+    - Pre-approved profiles (`get_default_verification_profiles`) dynamically anchored to `sys.executable` (e.g. `"{sys.executable}" -m pytest --ignore=tests/test_smoke_live.py`) preventing ambient PATH or relative binary hijacking.
+    - Command validation rejecting trivial pass commands and unquoted shell operators.
+    - Minimal environment allowlist (`_build_safe_env`) withholding host secrets.
+    - Capture-time streaming memory bound (`BoundedStreamCapture` <= 64KB RAM total via 32KB head and 32KB circular deque tail).
+    - Cross-platform process-tree termination: `taskkill /F /T /PID` on Windows, process group `os.killpg(os.getpgid(pid), signal.SIGKILL)` on POSIX.
+    - Exit code capture, SQLite persistence with provenance tracking (`origin`, `profile_name`, `authorized_by`).
+  - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify`, `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
+    - Profile resolution assigns `origin = "configured_profile"` and `authorized_by = "system_policy"`.
+    - Custom command execution enforces role-based access control: unauthenticated callers receive HTTP 401 Unauthorized; authenticated non-operators receive HTTP 403 Forbidden; authenticated operators execute with provenance deterministically set to `authorized_by = principal.identity` and `origin = "operator"`. Untrusted callers cannot manufacture operator provenance.
   - `core/diagnostics.py`: `mask_secret` safe credential display (`sk-***...***5de (len=34)`), shallow model connectivity probe, SQLite database health check (PRAGMA integrity_check, WAL mode, migration versions), CLI entry point `chatbot-diagnostics`.
   - `storage/migrations.py`: Migration 003 (`003_reliability_observability_verification`) creating `verification_records` and `runtime_events` tables with performance indexes and adding correlation, provenance, and retry columns to `tasks`, `tool_executions`, `verification_records`, and `model_calls`.
-  - `api/routes/verification.py`: REST endpoints `POST /api/tasks/{task_id}/verify` (with profile/provenance support), `GET /api/tasks/{task_id}/verifications`, and `GET /api/diagnostics`.
   - `tools/security.py`: Defense-in-depth secret sanitization covering AWS keys, JWTs, URLs with embedded passwords, private keys, and recursive object scrubbing (`redact_secrets_obj`).
 - **Verification Evidence:**
   - 43 dedicated Phase 8 tests passed across 6 test suites (`test_retries.py`, `test_loop_detector.py`, `test_verification.py`, `test_observability.py`, `test_cancellation_shutdown.py`, `test_diagnostics.py`).

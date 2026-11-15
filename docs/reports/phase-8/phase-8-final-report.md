@@ -3,7 +3,7 @@
 **Date:** 2026-11-15  
 **Role:** Project Orchestrator & Forensic Lead  
 **Status:** Complete — Ready for Explicit Operator Freeze  
-**Git Lineage:** `3a9a378` (Phase 7 freeze) → `7839890` (Phase 8 baseline) → `9590efd` (Phase 8 full) → `b76268a` (UI & test fixes) → `45f3aeb` (forensic review) → current working tree  
+**Git Lineage:** `9590efd` (Formal Phase 7 freeze commit) → `b76268a` (Phase 8 initial implementation) → `2b30a54` (Verification trust boundary & stream capture hardening) → `bf63fc6` (Test count & authorization reconciliation) → current working tree (enforce operator role auth & trusted executable paths)  
 
 ---
 
@@ -16,9 +16,12 @@ Phase 8 is complete. Following rigorous engineering critique addressing findings
 4. **Resilient Retries:** Failure classification (transient vs permanent) with jittered exponential backoff, `Retry-After` header parsing clamped to 60.0s max, and cooperative backoff cancellation; non-idempotent operations fail-closed.
 5. **Clean Cancellation & Graceful Shutdown:** Thread-safe cancellation token propagation, linearizable first-to-commit policy, and graceful ASGI shutdown hooks with deadline escalation.
 6. **Active Loop Defense:** Canonical SHA-256 tool call hashing detecting identical consecutive failures (threshold=3) and alternating ping-pong cycles (`A -> B -> A -> B`, threshold=2).
-7. **Verification Trust Boundary & Provenance (F8-01):** Pre-approved profiles (`DEFAULT_VERIFICATION_PROFILES`) and explicit operator authorization, rejection of trivial self-certification commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`), with clean environment allowlists (`_build_safe_env`).
-8. **Capture-Time Streaming Memory Bound (F8-02):** Subprocess output consumed in 4KB chunks via `BoundedStreamCapture` (32KB head + 32KB circular deque tail), capping capture-time memory at `<= 64KB` in RAM regardless of stream size.
-9. **Multi-Level Process Tree Termination (F8-04):** Cross-platform termination (`taskkill /F /T` on Windows / SIGKILL on POSIX) terminating both child and grandchild subprocesses on timeout or cancellation, verified empirically.
+7. **Verification Trust Boundary & Operator Role Authorization (F8-01, Conditions 1–4):**
+   - Pre-approved profiles (`get_default_verification_profiles`) dynamically anchored to `sys.executable` (preventing relative path/binary hijacking) with `origin = "configured_profile"` and `authorized_by = "system_policy"`.
+   - Custom commands protected by principal authentication (`core/auth.py`): unauthenticated callers receive `HTTP 401 Unauthorized` (Condition 1); authenticated non-operators receive `HTTP 403 Forbidden` (Condition 2); authenticated operators execute with provenance deterministically bound to `authorized_by = principal.identity` and `origin = "operator"` (Condition 3).
+   - Rejection of trivial self-certification commands (`echo`, `true`, `exit 0`, `printf`, `:`) and unquoted shell chaining (`&&`, `||`, `;`), with clean environment allowlists (`_build_safe_env`).
+8. **Capture-Time Streaming Memory Bound (F8-02, Condition 5):** Subprocess output consumed in 4KB chunks via `BoundedStreamCapture` (32KB head + 32KB circular deque tail), capping capture-time memory at `<= 64KB` in RAM regardless of stream size.
+9. **Multi-Level Process Tree Termination (F8-04, Condition 5):** Cross-platform termination (`taskkill /F /T` on Windows / `os.killpg(os.getpgid(pid), signal.SIGKILL)` on POSIX) terminating both child and grandchild subprocesses on timeout or cancellation, verified empirically.
 10. **Decoupled Verification Status:** Untrusted model completion claims cannot self-certify; `TaskStatus` and `VerificationStatus` remain strictly distinct.
 11. **Defense-in-Depth Secret Scrubbing (F8-03):** Recognized credential patterns (AWS keys, JWTs, URLs with embedded passwords, private key blocks, bearer/basic tokens) recursively scrubbed from nested dicts, lists, and exception messages prior to persistence.
 12. **CLI Diagnostics:** Secret-masked diagnostic utility (`chatbot-diagnostics`) and REST health endpoint (`GET /api/diagnostics`).

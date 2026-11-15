@@ -7,8 +7,10 @@ from enum import Enum
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
+import sys
 import time
 from typing import Dict, List, Optional
 import uuid
@@ -23,14 +25,28 @@ logger = logging.getLogger("agent_runtime.core.verification")
 # Maximum permitted byte cap for verification output capture (64 KB)
 MAX_VERIFICATION_OUTPUT_BYTES = 64 * 1024
 
-# Default pre-approved trusted verification profiles
-DEFAULT_VERIFICATION_PROFILES: Dict[str, str] = {
-    "test": "pytest",
-    "test_unit": "pytest tests/ -k 'not smoke'",
-    "build": "npm run build",
-    "lint": "ruff check .",
-    "typecheck": "mypy .",
-}
+
+def get_default_verification_profiles() -> Dict[str, str]:
+    """Resolve pre-approved verification profiles to trusted executable paths under the active environment.
+
+    Ensures that Python-based tools execute via the active virtual environment's sys.executable,
+    preventing PATH confusion, relative-path hijacking, or rogue scripts in the workspace.
+    """
+    import shutil
+    py_exec = sys.executable
+    npm_path = shutil.which("npm") or "npm"
+
+    return {
+        "test": f'"{py_exec}" -m pytest --ignore=tests/test_smoke_live.py',
+        "test_unit": f'"{py_exec}" -m pytest tests/ -k "not smoke"',
+        "build": f'"{npm_path}" run build',
+        "lint": f'"{py_exec}" -m ruff check .',
+        "typecheck": f'"{py_exec}" -m mypy .',
+    }
+
+
+# Default pre-approved trusted verification profiles anchored to trusted runtime executable
+DEFAULT_VERIFICATION_PROFILES: Dict[str, str] = get_default_verification_profiles()
 
 # Regex detecting trivial fake pass commands that attempt to manufacture an exit code of 0 without running tests
 TRIVIAL_PASS_COMMAND_PATTERN = re.compile(
